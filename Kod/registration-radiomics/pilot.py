@@ -17,9 +17,17 @@ from metrics import compare_labels
 from registration import read_image, resample_image, resample_mask, rigid_register
 
 
+def label_union_mask(segmentation: sitk.Image, labels: list[int]) -> sitk.Image:
+    array = sitk.GetArrayFromImage(segmentation)
+    mask = sum((array == label for label in labels), start=(array == -1))
+    return sitk.GetImageFromArray(mask.astype("uint8"))
+
+
 def run(args: argparse.Namespace) -> None:
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
+
+    print("[1/5] CT ve segmentation dosyaları okunuyor", flush=True)
 
     fixed_ct = read_image(Path(args.fixed_ct), sitk.sitkFloat32)
     moving_ct = read_image(Path(args.moving_ct), sitk.sitkFloat32)
@@ -33,7 +41,21 @@ def run(args: argparse.Namespace) -> None:
     if moving_ct.GetSize() != moving_seg.GetSize():
         raise ValueError("Moving CT and moving segmentation are not on the same grid")
 
-    transform = rigid_register(fixed_ct, moving_ct)
+    print("[2/5] Rigid registration başlatılıyor", flush=True)
+    registration_labels = args.registration_labels or args.labels
+    if not registration_labels:
+        raise ValueError("Provide --registration-labels or --labels")
+    fixed_registration_mask = label_union_mask(fixed_seg, registration_labels)
+    moving_registration_mask = label_union_mask(moving_seg, registration_labels)
+    fixed_registration_mask.CopyInformation(fixed_seg)
+    moving_registration_mask.CopyInformation(moving_seg)
+    transform = rigid_register(
+        fixed_ct,
+        moving_ct,
+        fixed_mask=fixed_registration_mask,
+        moving_mask=moving_registration_mask,
+    )
+    print("[3/5] Transform CT ve maskeye uygulanıyor", flush=True)
     registered_ct = resample_image(
         moving_ct, fixed_ct, transform, sitk.sitkLinear, default_value=-1024.0
     )
@@ -43,6 +65,7 @@ def run(args: argparse.Namespace) -> None:
     sitk.WriteImage(registered_seg, str(output / "seg_registered.nii.gz"))
     sitk.WriteTransform(transform, str(output / "moving_to_fixed.tfm"))
 
+    print("[4/5] Geometrik metrikler hesaplanıyor", flush=True)
     labels = args.labels or sorted(
         set(sitk.GetArrayViewFromImage(fixed_seg).ravel())
         & set(sitk.GetArrayViewFromImage(moving_seg).ravel())
@@ -69,6 +92,7 @@ def run(args: argparse.Namespace) -> None:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
+    print(f"[5/5] Tamamlandı: {output}", flush=True)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -79,6 +103,7 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--moving-seg", required=True)
     ap.add_argument("--output", required=True)
     ap.add_argument("--labels", type=int, nargs="*")
+    ap.add_argument("--registration-labels", type=int, nargs="*")
     return ap
 
 

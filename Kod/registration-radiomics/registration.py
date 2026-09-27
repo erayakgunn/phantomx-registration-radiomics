@@ -14,7 +14,12 @@ def read_image(path: Path, pixel_type: int | None = None) -> sitk.Image:
     return image
 
 
-def rigid_register(fixed: sitk.Image, moving: sitk.Image) -> sitk.Transform:
+def rigid_register(
+    fixed: sitk.Image,
+    moving: sitk.Image,
+    fixed_mask: sitk.Image | None = None,
+    moving_mask: sitk.Image | None = None,
+) -> sitk.Transform:
     """Estimate one global 3D Euler transform from moving to fixed space."""
     initial = sitk.CenteredTransformInitializer(
         fixed,
@@ -27,6 +32,10 @@ def rigid_register(fixed: sitk.Image, moving: sitk.Image) -> sitk.Transform:
     method.SetMetricAsMattesMutualInformation(numberOfHistogramBins=50)
     method.SetMetricSamplingStrategy(method.RANDOM)
     method.SetMetricSamplingPercentage(0.2)
+    if fixed_mask is not None:
+        method.SetMetricFixedMask(fixed_mask)
+    if moving_mask is not None:
+        method.SetMetricMovingMask(moving_mask)
     method.SetInterpolator(sitk.sitkLinear)
     method.SetOptimizerAsGradientDescent(
         learningRate=1.0,
