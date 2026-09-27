@@ -252,7 +252,7 @@ def _run(args: argparse.Namespace, output: Path) -> None:
                     sitk.sitkLinear, default_value=-1024.0
                 )
                 registered_seg = moving_seg_on_fixed
-                stable_after = stable_before if candidate_transform is None else stable_after
+                stable_after = stable_before
         registration_qc = {
             "stable_before": stable_before,
             "stable_after": stable_after,
