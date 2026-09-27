@@ -74,7 +74,9 @@ class RegistrationGui(tk.Tk):
             )
 
         self.fields["labels"] = tk.StringVar(value="1 52")
-        self.fields["registration_labels"] = tk.StringVar(value="1 52")
+        self.fields["registration_labels"] = tk.StringVar(
+            value="27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 92 93 94 95 96 97 98 99 100 101 102 103 104 105 106 107 108 109 110 111 112 113 114 115 116"
+        )
         ttk.Label(container, text="Evaluation labels").grid(row=9, column=0, sticky="w", pady=4)
         ttk.Entry(container, textvariable=self.fields["labels"]).grid(row=9, column=1, sticky="ew", padx=8, pady=4)
         ttk.Label(container, text="örn. 1 52 = spleen, aorta").grid(row=9, column=2, sticky="w")

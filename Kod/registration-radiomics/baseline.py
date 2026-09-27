@@ -13,6 +13,7 @@ from pathlib import Path
 import SimpleITK as sitk
 
 from metrics import compare_label
+from registration import resample_mask
 
 
 for stream in (sys.stdout, sys.stderr):
@@ -90,13 +91,18 @@ def run(root: Path, output: Path, labels: list[int]) -> None:
             str(root / "segmentation" / moving.name / "seg.nii.gz"),
             sitk.sitkUInt16,
         )
-        moving_array = sitk.GetArrayFromImage(moving_seg)
+        moving_on_fixed = resample_mask(
+            moving_seg,
+            fixed_seg,
+            sitk.Transform(3, sitk.sitkIdentity),
+        )
+        moving_array = sitk.GetArrayFromImage(moving_on_fixed)
         pair_rows: list[dict] = []
         workers = min(max(1, os.cpu_count() or 1), len(labels))
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {
                 pool.submit(
-                    _metric_row, fixed_seg, moving_seg,
+                    _metric_row, fixed_seg, moving_on_fixed,
                     fixed_array, moving_array, label
                 ): label
                 for label in labels

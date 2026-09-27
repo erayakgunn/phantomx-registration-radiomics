@@ -12,8 +12,22 @@ from pathlib import Path
 
 import SimpleITK as sitk
 
-from metrics import compare_label
-from registration import read_image, resample_image, resample_mask, rigid_register
+from metrics import centroid_displacement, compare_label
+from registration import (
+    read_image,
+    centroid_initial_transform,
+    resample_for_registration,
+    resample_image,
+    resample_mask,
+    rigid_register,
+)
+
+
+DEFAULT_REGISTRATION_LABELS = (
+    *range(27, 44),       # vertebrae T/L/S
+    *range(92, 116),      # ribs
+    116,                  # sternum
+)
 
 
 for stream in (sys.stdout, sys.stderr):
@@ -78,8 +92,13 @@ def _run(args: argparse.Namespace, output: Path) -> None:
         raise ValueError("Fixed CT and fixed segmentation are not on the same grid")
     if moving_ct.GetSize() != moving_seg.GetSize():
         raise ValueError("Moving CT and moving segmentation are not on the same grid")
+    moving_seg_on_fixed = resample_mask(
+        moving_seg,
+        fixed_seg,
+        sitk.Transform(3, sitk.sitkIdentity),
+    )
 
-    registration_labels = args.registration_labels or args.labels
+    registration_labels = args.registration_labels or list(DEFAULT_REGISTRATION_LABELS)
     if not registration_labels:
         raise ValueError("Provide --registration-labels or --labels")
     labels = args.labels or sorted(
@@ -94,6 +113,8 @@ def _run(args: argparse.Namespace, output: Path) -> None:
         "moving_seg": str(Path(args.moving_seg).resolve()),
         "labels": sorted(labels),
         "registration_labels": sorted(registration_labels),
+        "registration_spacing": args.registration_spacing,
+        "skip_threshold_mm": args.skip_threshold_mm,
     }
     state_path = output / "pilot_state.json"
     can_resume_registration = False
@@ -115,20 +136,63 @@ def _run(args: argparse.Namespace, output: Path) -> None:
         registered_ct = read_image(registered_ct_path, sitk.sitkFloat32)
         registered_seg = read_image(registered_seg_path, sitk.sitkUInt16)
     else:
-        print("[2/5] Rigid registration başlatılıyor", flush=True)
-        fixed_registration_mask = label_union_mask(fixed_seg, registration_labels)
-        moving_registration_mask = label_union_mask(moving_seg, registration_labels)
-        transform = rigid_register(
-            fixed_ct,
-            moving_ct,
-            fixed_mask=fixed_registration_mask,
-            moving_mask=moving_registration_mask,
-        )
-        print("[3/5] Transform CT ve maskeye uygulanıyor", flush=True)
-        registered_ct = resample_image(
-            moving_ct, fixed_ct, transform, sitk.sitkLinear, default_value=-1024.0
-        )
-        registered_seg = resample_mask(moving_seg, fixed_seg, transform)
+        baseline_displacements = [
+            centroid_displacement(fixed_seg, moving_seg_on_fixed, label)
+            for label in labels
+        ]
+        max_displacement = max(baseline_displacements, default=0.0)
+        if max_displacement <= args.skip_threshold_mm:
+            print(
+                f"[2/5] Baseline yeterli ({max_displacement:.2f} mm); "
+                "rigid registration atlanıyor",
+                flush=True,
+            )
+            transform = sitk.Transform(3, sitk.sitkIdentity)
+            registered_ct = resample_image(
+                moving_ct,
+                fixed_ct,
+                transform,
+                sitk.sitkLinear,
+                default_value=-1024.0,
+            )
+            registered_seg = moving_seg_on_fixed
+        else:
+            print("[2/5] Rigid registration başlatılıyor", flush=True)
+            registration_fixed_ct = resample_for_registration(
+                fixed_ct, args.registration_spacing, sitk.sitkLinear
+            )
+            registration_moving_ct = resample_for_registration(
+                moving_ct, args.registration_spacing, sitk.sitkLinear
+            )
+            fixed_registration_mask = resample_for_registration(
+                label_union_mask(fixed_seg, registration_labels),
+                args.registration_spacing,
+                sitk.sitkNearestNeighbor,
+            )
+            moving_registration_mask = resample_for_registration(
+                label_union_mask(moving_seg, registration_labels),
+                args.registration_spacing,
+                sitk.sitkNearestNeighbor,
+            )
+            initial_transform = centroid_initial_transform(
+                registration_fixed_ct,
+                registration_moving_ct,
+                fixed_registration_mask,
+                moving_registration_mask,
+            )
+            transform = rigid_register(
+                registration_fixed_ct,
+                registration_moving_ct,
+                fixed_mask=fixed_registration_mask,
+                initial_transform=initial_transform,
+            )
+            print("[3/5] Transform CT ve maskeye uygulanıyor", flush=True)
+            registered_ct = resample_image(
+                moving_ct, fixed_ct, transform, sitk.sitkLinear, default_value=-1024.0
+            )
+            registered_seg = resample_mask(moving_seg, fixed_seg, transform)
+        if max_displacement <= args.skip_threshold_mm:
+            print("[3/5] Identity transform fixed grid üzerine uygulanıyor", flush=True)
         sitk.WriteTransform(transform, str(transform_path))
         _atomic_write_image(registered_ct, registered_ct_path)
         _atomic_write_image(registered_seg, registered_seg_path)
@@ -137,7 +201,7 @@ def _run(args: argparse.Namespace, output: Path) -> None:
 
     print("[4/5] Geometrik metrikler hesaplanıyor", flush=True)
     fixed_array = sitk.GetArrayFromImage(fixed_seg)
-    moving_array = sitk.GetArrayFromImage(moving_seg)
+    moving_array = sitk.GetArrayFromImage(moving_seg_on_fixed)
     registered_array = sitk.GetArrayFromImage(registered_seg)
     partial_path = output / "metrics.partial.csv"
     rows_by_label: dict[int, dict] = {}
@@ -155,7 +219,7 @@ def _run(args: argparse.Namespace, output: Path) -> None:
                 pool.submit(
                     _metric_row,
                     fixed_seg,
-                    moving_seg,
+                    moving_seg_on_fixed,
                     registered_seg,
                     label,
                     fixed_array,
@@ -211,6 +275,8 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--output", required=True)
     ap.add_argument("--labels", type=int, nargs="*")
     ap.add_argument("--registration-labels", type=int, nargs="*")
+    ap.add_argument("--registration-spacing", type=float, default=2.0)
+    ap.add_argument("--skip-threshold-mm", type=float, default=5.0)
     return ap
 
 
