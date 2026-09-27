@@ -32,7 +32,7 @@ DEFAULT_REGISTRATION_LABELS = (
     116,                  # sternum
 )
 REGISTRATION_METRIC = "correlation"
-WORKFLOW_VERSION = 4
+WORKFLOW_VERSION = 5
 
 
 for stream in (sys.stdout, sys.stderr):
@@ -170,7 +170,12 @@ def _run(args: argparse.Namespace, output: Path) -> None:
             centroid_displacement(fixed_seg, moving_seg_on_fixed, label)
             for label in labels
         ]
-        max_displacement = max(baseline_displacements, default=0.0)
+        valid_displacements = [
+            value for value in baseline_displacements if math.isfinite(value)
+        ]
+        max_displacement = max(valid_displacements, default=0.0)
+        if not valid_displacements:
+            registration_method = "identity_no_valid_target_centroid"
         if max_displacement <= args.skip_threshold_mm:
             print(
                 f"[2/5] Baseline yeterli ({max_displacement:.2f} mm); "
@@ -188,6 +193,16 @@ def _run(args: argparse.Namespace, output: Path) -> None:
             registered_seg = moving_seg_on_fixed
             stable_after = stable_before
             accepted = False
+        elif not valid_displacements:
+            transform = sitk.Transform(3, sitk.sitkIdentity)
+            registered_ct = resample_image(
+                moving_ct, fixed_ct, transform,
+                sitk.sitkLinear, default_value=-1024.0
+            )
+            registered_seg = moving_seg_on_fixed
+            stable_after = stable_before
+            accepted = False
+            print("[qc] Geçerli target centroid yok; identity kullanılıyor", flush=True)
         else:
             print("[2/5] Rigid registration başlatılıyor", flush=True)
             registration_fixed_ct = resample_for_registration(
@@ -218,19 +233,24 @@ def _run(args: argparse.Namespace, output: Path) -> None:
                     moving_registration_mask,
                 )
             accepted = False
-            try:
-                candidate_transform = rigid_register(
-                    registration_fixed_ct,
-                    registration_moving_ct,
-                    fixed_mask=fixed_registration_mask,
-                    initial_transform=initial_transform,
-                    metric=REGISTRATION_METRIC,
-                    transform_kind=args.transform_kind,
-                )
-            except Exception as exc:  # noqa: BLE001
-                registration_error = repr(exc)
+            if float(stable_before["dice"]) <= 0.0:
                 candidate_transform = None
-                print(f"[qc] Registration geçersiz: {exc}; identity kullanılıyor", flush=True)
+                registration_error = "stable mask has no baseline overlap"
+                print("[qc] Stabil maskede overlap yok; rigid atlanıyor", flush=True)
+            else:
+                try:
+                    candidate_transform = rigid_register(
+                        registration_fixed_ct,
+                        registration_moving_ct,
+                        fixed_mask=fixed_registration_mask,
+                        initial_transform=initial_transform,
+                        metric=REGISTRATION_METRIC,
+                        transform_kind=args.transform_kind,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    registration_error = repr(exc)
+                    candidate_transform = None
+                    print(f"[qc] Registration geçersiz: {exc}; identity kullanılıyor", flush=True)
             if candidate_transform is not None:
                 print("[3/5] Transform CT ve maskeye uygulanıyor", flush=True)
                 output_transform = candidate_transform.GetInverse()
@@ -245,7 +265,7 @@ def _run(args: argparse.Namespace, output: Path) -> None:
                 stable_after = _stable_score(fixed_stable_mask, candidate_stable)
                 accepted = (
                     math.isfinite(float(stable_after["dice"]))
-                    and float(stable_after["dice"]) >= float(stable_before["dice"])
+                    and float(stable_after["dice"]) > float(stable_before["dice"]) + 1e-6
                 )
                 candidate_transform_path = output / "candidate_moving_to_fixed.tfm"
                 sitk.WriteTransform(output_transform, str(candidate_transform_path))
