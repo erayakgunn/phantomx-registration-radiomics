@@ -17,10 +17,12 @@ from metrics import centroid_displacement, compare_label
 from registration import (
     read_image,
     centroid_initial_transform,
+    translation_centroid_initial_transform,
     resample_for_registration,
     resample_image,
     resample_mask,
     rigid_register,
+    translation_centroid_output_transform,
 )
 
 
@@ -30,7 +32,7 @@ DEFAULT_REGISTRATION_LABELS = (
     116,                  # sternum
 )
 REGISTRATION_METRIC = "correlation"
-WORKFLOW_VERSION = 3
+WORKFLOW_VERSION = 4
 
 
 for stream in (sys.stdout, sys.stderr):
@@ -132,6 +134,7 @@ def _run(args: argparse.Namespace, output: Path) -> None:
         "registration_spacing": args.registration_spacing,
         "registration_metric": REGISTRATION_METRIC,
         "skip_threshold_mm": args.skip_threshold_mm,
+        "transform_kind": args.transform_kind,
     }
     state_path = output / "pilot_state.json"
     can_resume_registration = False
@@ -162,6 +165,7 @@ def _run(args: argparse.Namespace, output: Path) -> None:
             sitk.Transform(3, sitk.sitkIdentity),
         )
         stable_before = _stable_score(fixed_stable_mask, moving_stable_on_fixed)
+        registration_method = "identity"
         baseline_displacements = [
             centroid_displacement(fixed_seg, moving_seg_on_fixed, label)
             for label in labels
@@ -202,12 +206,17 @@ def _run(args: argparse.Namespace, output: Path) -> None:
                 args.registration_spacing,
                 sitk.sitkNearestNeighbor,
             )
-            initial_transform = centroid_initial_transform(
-                registration_fixed_ct,
-                registration_moving_ct,
-                fixed_registration_mask,
-                moving_registration_mask,
-            )
+            if args.transform_kind == "translation":
+                initial_transform = translation_centroid_initial_transform(
+                    fixed_registration_mask, moving_registration_mask
+                )
+            else:
+                initial_transform = centroid_initial_transform(
+                    registration_fixed_ct,
+                    registration_moving_ct,
+                    fixed_registration_mask,
+                    moving_registration_mask,
+                )
             accepted = False
             try:
                 candidate_transform = rigid_register(
@@ -216,6 +225,7 @@ def _run(args: argparse.Namespace, output: Path) -> None:
                     fixed_mask=fixed_registration_mask,
                     initial_transform=initial_transform,
                     metric=REGISTRATION_METRIC,
+                    transform_kind=args.transform_kind,
                 )
             except Exception as exc:  # noqa: BLE001
                 registration_error = repr(exc)
@@ -223,13 +233,14 @@ def _run(args: argparse.Namespace, output: Path) -> None:
                 print(f"[qc] Registration geçersiz: {exc}; identity kullanılıyor", flush=True)
             if candidate_transform is not None:
                 print("[3/5] Transform CT ve maskeye uygulanıyor", flush=True)
+                output_transform = candidate_transform.GetInverse()
                 candidate_ct = resample_image(
-                    moving_ct, fixed_ct, candidate_transform,
+                    moving_ct, fixed_ct, output_transform,
                     sitk.sitkLinear, default_value=-1024.0
                 )
-                candidate_seg = resample_mask(moving_seg, fixed_seg, candidate_transform)
+                candidate_seg = resample_mask(moving_seg, fixed_seg, output_transform)
                 candidate_stable = resample_mask(
-                    moving_stable_mask, fixed_stable_mask, candidate_transform
+                    moving_stable_mask, fixed_stable_mask, output_transform
                 )
                 stable_after = _stable_score(fixed_stable_mask, candidate_stable)
                 accepted = (
@@ -237,27 +248,53 @@ def _run(args: argparse.Namespace, output: Path) -> None:
                     and float(stable_after["dice"]) >= float(stable_before["dice"])
                 )
                 candidate_transform_path = output / "candidate_moving_to_fixed.tfm"
-                sitk.WriteTransform(candidate_transform, str(candidate_transform_path))
+                sitk.WriteTransform(output_transform, str(candidate_transform_path))
                 if accepted:
-                    transform = candidate_transform
+                    transform = output_transform
                     registered_ct = candidate_ct
                     registered_seg = candidate_seg
+                    registration_method = args.transform_kind
                     print("[qc] Stabil kemik maskesi iyileşti; transform kabul edildi", flush=True)
                 else:
                     print("[qc] Stabil kemik maskesi iyileşmedi; identity kullanılıyor", flush=True)
             if candidate_transform is None or not accepted:
-                transform = sitk.Transform(3, sitk.sitkIdentity)
-                registered_ct = resample_image(
-                    moving_ct, fixed_ct, transform,
-                    sitk.sitkLinear, default_value=-1024.0
+                fallback_transform = translation_centroid_output_transform(
+                    fixed_stable_mask, moving_stable_mask
                 )
-                registered_seg = moving_seg_on_fixed
-                stable_after = stable_before
+                fallback_stable = resample_mask(
+                    moving_stable_mask, fixed_stable_mask, fallback_transform
+                )
+                fallback_score = _stable_score(fixed_stable_mask, fallback_stable)
+                fallback_ok = (
+                    math.isfinite(float(fallback_score["dice"]))
+                    and float(fallback_score["dice"]) >= float(stable_before["dice"])
+                )
+                if fallback_ok:
+                    transform = fallback_transform
+                    registered_ct = resample_image(
+                        moving_ct, fixed_ct, transform,
+                        sitk.sitkLinear, default_value=-1024.0
+                    )
+                    registered_seg = resample_mask(moving_seg, fixed_seg, transform)
+                    stable_after = fallback_score
+                    accepted = True
+                    registration_method = "centroid_translation_fallback"
+                    print("[qc] Centroid translation fallback kabul edildi", flush=True)
+                else:
+                    transform = sitk.Transform(3, sitk.sitkIdentity)
+                    registered_ct = resample_image(
+                        moving_ct, fixed_ct, transform,
+                        sitk.sitkLinear, default_value=-1024.0
+                    )
+                    registered_seg = moving_seg_on_fixed
+                    stable_after = stable_before
+                    registration_method = "identity"
         registration_qc = {
             "stable_before": stable_before,
             "stable_after": stable_after,
             "registration_attempted": max_displacement > args.skip_threshold_mm,
             "registration_accepted": accepted,
+            "registration_method": registration_method,
             "registration_error": registration_error,
             "target_max_centroid_displacement_mm": max_displacement,
         }
@@ -353,6 +390,7 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--registration-labels", type=int, nargs="*")
     ap.add_argument("--registration-spacing", type=float, default=2.0)
     ap.add_argument("--skip-threshold-mm", type=float, default=5.0)
+    ap.add_argument("--transform-kind", choices=("rigid", "translation"), default="rigid")
     return ap
 
 

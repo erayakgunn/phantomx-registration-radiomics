@@ -23,16 +23,20 @@ def rigid_register(
     moving_mask: sitk.Image | None = None,
     initial_transform: sitk.Transform | None = None,
     metric: str = "correlation",
+    transform_kind: str = "rigid",
 ) -> sitk.Transform:
     """Estimate one global 3D Euler transform from moving to fixed space."""
-    initial = (
-        initial_transform
-        if initial_transform is not None
-        else sitk.CenteredTransformInitializer(
+    if initial_transform is not None:
+        initial = initial_transform
+    elif transform_kind == "translation":
+        initial = sitk.TranslationTransform(3)
+    elif transform_kind == "rigid":
+        initial = sitk.CenteredTransformInitializer(
             fixed, moving, sitk.Euler3DTransform(),
             sitk.CenteredTransformInitializerFilter.GEOMETRY,
         )
-    )
+    else:
+        raise ValueError(f"Unknown transform kind: {transform_kind}")
 
     method = sitk.ImageRegistrationMethod()
     if metric == "correlation":
@@ -94,6 +98,43 @@ def centroid_initial_transform(
     # SimpleITK resampling evaluates the moving image at transformed fixed
     # points, so the initializer uses the inverse physical shift.
     transform.SetTranslation(tuple(moving_centroid - fixed_centroid))
+    return transform
+
+
+def translation_centroid_initial_transform(
+    fixed_mask: sitk.Image,
+    moving_mask: sitk.Image,
+) -> sitk.TranslationTransform:
+    """Initialize a translation-only transform from physical mask centroids."""
+    stats_fixed = sitk.LabelShapeStatisticsImageFilter()
+    stats_moving = sitk.LabelShapeStatisticsImageFilter()
+    stats_fixed.Execute(sitk.Cast(fixed_mask > 0, sitk.sitkUInt8))
+    stats_moving.Execute(sitk.Cast(moving_mask > 0, sitk.sitkUInt8))
+    if not stats_fixed.HasLabel(1) or not stats_moving.HasLabel(1):
+        return sitk.TranslationTransform(3)
+    fixed_centroid = np.asarray(stats_fixed.GetCentroid(1), dtype=float)
+    moving_centroid = np.asarray(stats_moving.GetCentroid(1), dtype=float)
+    transform = sitk.TranslationTransform(3)
+    # TranslationTransform is passed directly to the registration metric,
+    # whose fixed-to-moving mapping uses the opposite physical shift.
+    transform.SetOffset(tuple(fixed_centroid - moving_centroid))
+    return transform
+
+
+def translation_centroid_output_transform(
+    fixed_mask: sitk.Image,
+    moving_mask: sitk.Image,
+) -> sitk.TranslationTransform:
+    """Create the moving-to-fixed translation for final resampling."""
+    stats_fixed = sitk.LabelShapeStatisticsImageFilter()
+    stats_moving = sitk.LabelShapeStatisticsImageFilter()
+    stats_fixed.Execute(sitk.Cast(fixed_mask > 0, sitk.sitkUInt8))
+    stats_moving.Execute(sitk.Cast(moving_mask > 0, sitk.sitkUInt8))
+    transform = sitk.TranslationTransform(3)
+    if stats_fixed.HasLabel(1) and stats_moving.HasLabel(1):
+        fixed_centroid = np.asarray(stats_fixed.GetCentroid(1), dtype=float)
+        moving_centroid = np.asarray(stats_moving.GetCentroid(1), dtype=float)
+        transform.SetOffset(tuple(moving_centroid - fixed_centroid))
     return transform
 
 
