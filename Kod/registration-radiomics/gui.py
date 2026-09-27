@@ -18,6 +18,7 @@ from tkinter import filedialog, messagebox, ttk
 
 ROOT = Path(__file__).resolve().parents[2]
 PILOT = Path(__file__).with_name("pilot.py")
+VENV_PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
 
 
 class RegistrationGui(tk.Tk):
@@ -120,8 +121,9 @@ class RegistrationGui(tk.Tk):
             ))
             self.fields["output"].set(output)
 
+        interpreter = str(VENV_PYTHON) if VENV_PYTHON.exists() else sys.executable
         args = [
-            sys.executable,
+            interpreter,
             str(PILOT),
             "--fixed-ct", self.fields["fixed_ct"].get(),
             "--fixed-seg", self.fields["fixed_seg"].get(),
@@ -132,6 +134,7 @@ class RegistrationGui(tk.Tk):
             "--registration-labels", *self.fields["registration_labels"].get().split(),
         ]
         self._write_log("Komut başlatılıyor...")
+        self._write_log("Python: " + interpreter)
         self._write_log("Çıktı: " + output)
         self.status.set("Çalışıyor...")
         self.run_button.configure(state="disabled")
