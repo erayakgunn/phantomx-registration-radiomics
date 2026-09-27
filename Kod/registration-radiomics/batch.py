@@ -33,7 +33,7 @@ def series_files(session: Path) -> list[tuple[str, Path, Path]]:
 
 def _process_pair(index: int, total: int, item, fixed_ct: Path,
                   fixed_seg: Path, output: Path, labels: list[int],
-                  threads_per_process: int) -> dict:
+                  threads_per_process: int, force: bool) -> dict:
     session, name, ct, seg = item
     pair_output = output / f"{session}__{name}"
     state_path = pair_output / "pilot_state.json"
@@ -43,7 +43,7 @@ def _process_pair(index: int, total: int, item, fixed_ct: Path,
             state = json.loads(state_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             state = {}
-        if state.get("metrics_complete") and state.get("workflow_version") == WORKFLOW_VERSION:
+        if not force and state.get("metrics_complete") and state.get("workflow_version") == WORKFLOW_VERSION:
             print(f"[batch {index}/{total}] tamamlanmış, atlanıyor", flush=True)
             return {"session": session, "series": name, "status": "resumed"}
 
@@ -57,6 +57,8 @@ def _process_pair(index: int, total: int, item, fixed_ct: Path,
         "--output", str(pair_output),
         "--labels", *[str(label) for label in labels],
     ]
+    if force:
+        command.append("--force")
     environment = os.environ.copy()
     environment["PHANTOMX_SITK_THREADS"] = str(threads_per_process)
     result = subprocess.run(
@@ -85,6 +87,8 @@ def _main(args: argparse.Namespace) -> int:
     fixed_session, fixed_name, fixed_ct, fixed_seg = fixed_candidates[0]
     moving = [item for item in all_series if item[1] != fixed_name or item[0] != fixed_session]
     moving.sort(key=lambda item: (item[0], item[1]))
+    if args.session_filter:
+        moving = [item for item in moving if item[0] == args.session_filter]
     if args.limit is not None:
         moving = moving[:args.limit]
 
@@ -103,7 +107,7 @@ def _main(args: argparse.Namespace) -> int:
             pool.submit(
                 _process_pair, index, total, item,
                 fixed_ct, fixed_seg, args.output, args.labels,
-                threads_per_process,
+                threads_per_process, args.force,
             ): index
             for index, item in enumerate(moving, start=1)
         }
@@ -149,6 +153,8 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--labels", type=int, nargs="+", default=[1, 52])
     ap.add_argument("--limit", type=int)
     ap.add_argument("--workers", type=int, default=2)
+    ap.add_argument("--session-filter")
+    ap.add_argument("--force", action="store_true")
     ap.add_argument("--stop-on-error", action="store_true")
     return ap
 

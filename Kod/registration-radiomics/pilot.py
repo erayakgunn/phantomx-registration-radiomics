@@ -145,14 +145,18 @@ def _run(args: argparse.Namespace, output: Path) -> None:
     }
     state_path = output / "pilot_state.json"
     can_resume_registration = False
+    if args.force:
+        state = None
     if state_path.exists():
-        state = json.loads(state_path.read_text(encoding="utf-8"))
-        if {key: state.get(key) for key in metadata} != metadata:
-            raise RuntimeError("Output klasörü farklı bir pilotla daha önce kullanılmış")
-        can_resume_registration = bool(state.get("registered"))
-    else:
+        if not args.force:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            if {key: state.get(key) for key in metadata} != metadata:
+                raise RuntimeError("Output klasörü farklı bir pilotla daha önce kullanılmış")
+            can_resume_registration = bool(state.get("registered"))
+    if state is None:
         state = {**metadata, "registered": False, "metrics": []}
         _atomic_json(state_path, state)
+        (output / "metrics.partial.csv").unlink(missing_ok=True)
 
     transform_path = output / "moving_to_fixed.tfm"
     registered_ct_path = output / "ct_registered.nii.gz"
@@ -183,6 +187,9 @@ def _run(args: argparse.Namespace, output: Path) -> None:
         max_displacement = max(valid_displacements, default=0.0)
         if not valid_displacements:
             registration_method = "identity_no_valid_target_centroid"
+            # The target organ is outside the current fixed grid, but stable
+            # structures may still provide a valid physical translation.
+            max_displacement = args.skip_threshold_mm + 1.0
         if max_displacement <= args.skip_threshold_mm:
             print(
                 f"[2/5] Baseline yeterli ({max_displacement:.2f} mm); "
@@ -200,16 +207,6 @@ def _run(args: argparse.Namespace, output: Path) -> None:
             registered_seg = moving_seg_on_fixed
             stable_after = stable_before
             accepted = False
-        elif not valid_displacements:
-            transform = sitk.Transform(3, sitk.sitkIdentity)
-            registered_ct = resample_image(
-                moving_ct, fixed_ct, transform,
-                sitk.sitkLinear, default_value=-1024.0
-            )
-            registered_seg = moving_seg_on_fixed
-            stable_after = stable_before
-            accepted = False
-            print("[qc] Geçerli target centroid yok; identity kullanılıyor", flush=True)
         else:
             print("[2/5] Rigid registration başlatılıyor", flush=True)
             registration_fixed_ct = resample_for_registration(
@@ -418,6 +415,7 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--registration-spacing", type=float, default=2.0)
     ap.add_argument("--skip-threshold-mm", type=float, default=5.0)
     ap.add_argument("--transform-kind", choices=("rigid", "translation"), default="rigid")
+    ap.add_argument("--force", action="store_true")
     return ap
 
 
