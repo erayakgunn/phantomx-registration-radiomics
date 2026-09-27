@@ -57,10 +57,11 @@ def _main(args: argparse.Namespace) -> int:
         "pairs": [],
     }
     manifest_path = args.output / "batch_manifest.json"
-    for session, name, ct, seg in moving:
+    total = len(moving)
+    for index, (session, name, ct, seg) in enumerate(moving, start=1):
         pair_output = args.output / f"{session}__{name}"
         state_path = pair_output / "pilot_state.json"
-        print(f"[batch] {session}/{name}", flush=True)
+        print(f"[batch {index}/{total}] {session}/{name}", flush=True)
         if state_path.exists():
             try:
                 state = json.loads(state_path.read_text(encoding="utf-8"))
