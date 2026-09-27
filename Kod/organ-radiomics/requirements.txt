@@ -1,0 +1,24 @@
+# PhantomXPro — ANA pipeline ortamı (klasörleme + NIfTI + MIRP radiomics)
+# Bu paketler, run_pipeline.py'yi çalıştıran Python'a kurulmalıdır.
+# Kurulum:
+#   <python.exe> -m pip install -r requirements.txt
+#
+# Not: TotalSegmentator BU ortamda DEĞİL, ayrı bir ortamda kurulur
+#      (bkz. requirements-totalsegmentator.txt).
+
+numpy==2.4.1
+pandas==3.0.1
+SimpleITK==2.5.3
+nibabel==5.3.3
+pydicom==3.0.1
+mirp==2.5.0
+psutil==7.2.2
+
+# Biçimlendirilmiş .xlsx çıktısı (excel_report). Yoksa yalnız CSV yazılır ve
+# uyarı verilir — ama README .xlsx'in otomatik oluştuğunu söylüyor, o yüzden
+# kurulum listesinde yer alması gerekiyor.
+openpyxl==3.1.5
+
+# Segmentasyonun görsel kontrolü (overlay_qc). Öznitelik hesabına girmez;
+# yalnızca QC PNG'lerini üretir.
+opencv-python==4.13.0.90

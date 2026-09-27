@@ -1,0 +1,37 @@
+# Raw and generated imaging data
+DICOM/
+PhantomX/LABELED/
+PhantomX/RADIOMICS/
+CalibraMics/
+MANIFEST.xlsx
+
+# Large derived and tabular outputs
+*.nii
+*.nii.gz
+*.dcm
+*.ima
+*.csv
+*.xlsx
+*.png
+*.pdf
+*.docx
+
+# Python environments and caches
+**/.venv/
+**/venv/
+**/env-main/
+**/env-ts/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local/runtime files
+*.log
+*.lo
+*.tmp
+*.bak
+dist/
+build/
+
+# Registration outputs will be regenerated from the ignored source data.
+PhantomX/REGISTRATION/

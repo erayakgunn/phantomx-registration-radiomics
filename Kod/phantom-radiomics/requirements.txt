@@ -1,0 +1,19 @@
+# Pinned because feature values depend on these versions, and this pipeline is
+# run at more than one site. An unpinned environment cannot support a
+# reproducibility claim: MIRP's feature implementations, scipy's interpolation
+# and numpy's reductions all decide the numbers.
+#
+# Verified against tests/test_ibsi_params.py::test_installed_versions_match_the_pins.
+# Bump deliberately, then re-extract every series — a workbook must never mix
+# rows produced by two library versions.
+
+mirp==2.5.0
+numpy==2.4.1
+scipy==1.17.0
+pandas==3.0.1
+SimpleITK==2.5.3
+pydicom==3.0.1
+openpyxl==3.1.5
+
+# MIRP pulls itk in for image handling.
+itk==5.4.5
