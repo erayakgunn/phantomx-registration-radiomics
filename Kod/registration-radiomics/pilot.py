@@ -96,10 +96,12 @@ def _run(args: argparse.Namespace, output: Path) -> None:
         "registration_labels": sorted(registration_labels),
     }
     state_path = output / "pilot_state.json"
+    can_resume_registration = False
     if state_path.exists():
         state = json.loads(state_path.read_text(encoding="utf-8"))
         if {key: state.get(key) for key in metadata} != metadata:
             raise RuntimeError("Output klasörü farklı bir pilotla daha önce kullanılmış")
+        can_resume_registration = bool(state.get("registered"))
     else:
         state = {**metadata, "registered": False, "metrics": []}
         _atomic_json(state_path, state)
@@ -107,7 +109,7 @@ def _run(args: argparse.Namespace, output: Path) -> None:
     transform_path = output / "moving_to_fixed.tfm"
     registered_ct_path = output / "ct_registered.nii.gz"
     registered_seg_path = output / "seg_registered.nii.gz"
-    if transform_path.exists() and registered_ct_path.exists() and registered_seg_path.exists():
+    if can_resume_registration and transform_path.exists() and registered_ct_path.exists() and registered_seg_path.exists():
         print("[2/5] Mevcut registration çıktısı kullanılıyor", flush=True)
         transform = sitk.ReadTransform(str(transform_path))
         registered_ct = read_image(registered_ct_path, sitk.sitkFloat32)
