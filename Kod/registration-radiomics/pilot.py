@@ -30,6 +30,7 @@ DEFAULT_REGISTRATION_LABELS = (
     116,                  # sternum
 )
 REGISTRATION_METRIC = "correlation"
+WORKFLOW_VERSION = 2
 
 
 for stream in (sys.stdout, sys.stderr):
@@ -121,6 +122,7 @@ def _run(args: argparse.Namespace, output: Path) -> None:
         - {0}
     )
     metadata = {
+        "workflow_version": WORKFLOW_VERSION,
         "fixed_ct": str(Path(args.fixed_ct).resolve()),
         "fixed_seg": str(Path(args.fixed_seg).resolve()),
         "moving_ct": str(Path(args.moving_ct).resolve()),
