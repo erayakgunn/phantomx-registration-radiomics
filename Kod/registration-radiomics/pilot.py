@@ -1,20 +1,18 @@
-"""Run one fixed/moving PhantomX registration pair.
-
-Example:
-    python pilot.py --fixed-ct ... --fixed-seg ... --moving-ct ... \
-        --moving-seg ... --output ... --labels 1 52
-"""
+"""Run one resumable fixed/moving PhantomX registration pair."""
 
 from __future__ import annotations
 
 import argparse
 import csv
+import json
+import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import SimpleITK as sitk
 
-from metrics import compare_labels
+from metrics import compare_label
 from registration import read_image, resample_image, resample_mask, rigid_register
 
 
@@ -28,15 +26,47 @@ for stream in (sys.stdout, sys.stderr):
 def label_union_mask(segmentation: sitk.Image, labels: list[int]) -> sitk.Image:
     array = sitk.GetArrayFromImage(segmentation)
     mask = sum((array == label for label in labels), start=(array == -1))
-    return sitk.GetImageFromArray(mask.astype("uint8"))
+    result = sitk.GetImageFromArray(mask.astype("uint8"))
+    result.CopyInformation(segmentation)
+    return result
 
 
-def run(args: argparse.Namespace) -> None:
-    output = Path(args.output)
-    output.mkdir(parents=True, exist_ok=True)
+def _atomic_json(path: Path, payload: dict) -> None:
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    os.replace(temporary, path)
 
+
+def _atomic_write_image(image: sitk.Image, path: Path) -> None:
+    temporary = path.with_name(path.name + ".tmp.nii.gz")
+    sitk.WriteImage(image, str(temporary))
+    os.replace(temporary, path)
+
+
+def _metric_row(fixed_seg: sitk.Image, moving_seg: sitk.Image,
+                registered_seg: sitk.Image, label: int,
+                fixed_array, moving_array, registered_array) -> dict:
+    before = compare_label(
+        fixed_seg, moving_seg, label, fixed_array, moving_array
+    )
+    after = compare_label(
+        fixed_seg, registered_seg, label, fixed_array, registered_array
+    )
+    return {
+        "label": label,
+        "before_dice": before["dice"],
+        "after_dice": after["dice"],
+        "before_centroid_displacement_mm": before["centroid_displacement_mm"],
+        "after_centroid_displacement_mm": after["centroid_displacement_mm"],
+        "before_hd95_mm": before["hd95_mm"],
+        "after_hd95_mm": after["hd95_mm"],
+        "before_assd_mm": before["assd_mm"],
+        "after_assd_mm": after["assd_mm"],
+    }
+
+
+def _run(args: argparse.Namespace, output: Path) -> None:
     print("[1/5] CT ve segmentation dosyaları okunuyor", flush=True)
-
     fixed_ct = read_image(Path(args.fixed_ct), sitk.sitkFloat32)
     moving_ct = read_image(Path(args.moving_ct), sitk.sitkFloat32)
     fixed_seg = read_image(Path(args.fixed_seg), sitk.sitkUInt16)
@@ -49,62 +79,129 @@ def run(args: argparse.Namespace) -> None:
     if moving_ct.GetSize() != moving_seg.GetSize():
         raise ValueError("Moving CT and moving segmentation are not on the same grid")
 
-    print("[2/5] Rigid registration başlatılıyor", flush=True)
     registration_labels = args.registration_labels or args.labels
     if not registration_labels:
         raise ValueError("Provide --registration-labels or --labels")
-    fixed_registration_mask = label_union_mask(fixed_seg, registration_labels)
-    moving_registration_mask = label_union_mask(moving_seg, registration_labels)
-    fixed_registration_mask.CopyInformation(fixed_seg)
-    moving_registration_mask.CopyInformation(moving_seg)
-    transform = rigid_register(
-        fixed_ct,
-        moving_ct,
-        fixed_mask=fixed_registration_mask,
-        moving_mask=moving_registration_mask,
-    )
-    print("[3/5] Transform CT ve maskeye uygulanıyor", flush=True)
-    registered_ct = resample_image(
-        moving_ct, fixed_ct, transform, sitk.sitkLinear, default_value=-1024.0
-    )
-    registered_seg = resample_mask(moving_seg, fixed_seg, transform)
-
-    sitk.WriteImage(registered_ct, str(output / "ct_registered.nii.gz"))
-    sitk.WriteImage(registered_seg, str(output / "seg_registered.nii.gz"))
-    sitk.WriteTransform(transform, str(output / "moving_to_fixed.tfm"))
-
-    print("[4/5] Geometrik metrikler hesaplanıyor", flush=True)
     labels = args.labels or sorted(
         set(sitk.GetArrayViewFromImage(fixed_seg).ravel())
         & set(sitk.GetArrayViewFromImage(moving_seg).ravel())
         - {0}
     )
-    before = compare_labels(fixed_seg, moving_seg, labels)
-    after = compare_labels(fixed_seg, registered_seg, labels)
-    rows = []
-    for pre, post in zip(before, after):
-        rows.append(
-            {
-                "label": pre["label"],
-                "before_dice": pre["dice"],
-                "after_dice": post["dice"],
-                "before_centroid_displacement_mm": pre["centroid_displacement_mm"],
-                "after_centroid_displacement_mm": post["centroid_displacement_mm"],
-                "before_hd95_mm": pre["hd95_mm"],
-                "after_hd95_mm": post["hd95_mm"],
-                "before_assd_mm": pre["assd_mm"],
-                "after_assd_mm": post["assd_mm"],
-            }
+    metadata = {
+        "fixed_ct": str(Path(args.fixed_ct).resolve()),
+        "fixed_seg": str(Path(args.fixed_seg).resolve()),
+        "moving_ct": str(Path(args.moving_ct).resolve()),
+        "moving_seg": str(Path(args.moving_seg).resolve()),
+        "labels": sorted(labels),
+        "registration_labels": sorted(registration_labels),
+    }
+    state_path = output / "pilot_state.json"
+    if state_path.exists():
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        if {key: state.get(key) for key in metadata} != metadata:
+            raise RuntimeError("Output klasörü farklı bir pilotla daha önce kullanılmış")
+    else:
+        state = {**metadata, "registered": False, "metrics": []}
+        _atomic_json(state_path, state)
+
+    transform_path = output / "moving_to_fixed.tfm"
+    registered_ct_path = output / "ct_registered.nii.gz"
+    registered_seg_path = output / "seg_registered.nii.gz"
+    if transform_path.exists() and registered_ct_path.exists() and registered_seg_path.exists():
+        print("[2/5] Mevcut registration çıktısı kullanılıyor", flush=True)
+        transform = sitk.ReadTransform(str(transform_path))
+        registered_ct = read_image(registered_ct_path, sitk.sitkFloat32)
+        registered_seg = read_image(registered_seg_path, sitk.sitkUInt16)
+    else:
+        print("[2/5] Rigid registration başlatılıyor", flush=True)
+        fixed_registration_mask = label_union_mask(fixed_seg, registration_labels)
+        moving_registration_mask = label_union_mask(moving_seg, registration_labels)
+        transform = rigid_register(
+            fixed_ct,
+            moving_ct,
+            fixed_mask=fixed_registration_mask,
+            moving_mask=moving_registration_mask,
         )
+        print("[3/5] Transform CT ve maskeye uygulanıyor", flush=True)
+        registered_ct = resample_image(
+            moving_ct, fixed_ct, transform, sitk.sitkLinear, default_value=-1024.0
+        )
+        registered_seg = resample_mask(moving_seg, fixed_seg, transform)
+        sitk.WriteTransform(transform, str(transform_path))
+        _atomic_write_image(registered_ct, registered_ct_path)
+        _atomic_write_image(registered_seg, registered_seg_path)
+        state["registered"] = True
+        _atomic_json(state_path, state)
+
+    print("[4/5] Geometrik metrikler hesaplanıyor", flush=True)
+    fixed_array = sitk.GetArrayFromImage(fixed_seg)
+    moving_array = sitk.GetArrayFromImage(moving_seg)
+    registered_array = sitk.GetArrayFromImage(registered_seg)
+    partial_path = output / "metrics.partial.csv"
+    rows_by_label: dict[int, dict] = {}
+    if partial_path.exists():
+        with partial_path.open(newline="", encoding="utf-8") as handle:
+            rows_by_label = {int(row["label"]): row for row in csv.DictReader(handle)}
+        print(f"[metrics] checkpoint bulundu: {len(rows_by_label)} label", flush=True)
+
+    missing = [label for label in labels if label not in rows_by_label]
+    workers = min(max(1, os.cpu_count() or 1), len(missing)) if missing else 0
+    if workers:
+        print(f"[metrics] {len(missing)} label, {workers} worker", flush=True)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(
+                    _metric_row,
+                    fixed_seg,
+                    moving_seg,
+                    registered_seg,
+                    label,
+                    fixed_array,
+                    moving_array,
+                    registered_array,
+                ): label
+                for label in missing
+            }
+            for future in as_completed(futures):
+                label = futures[future]
+                rows_by_label[label] = future.result()
+                print(f"[metrics] label {label} tamamlandı", flush=True)
+                with partial_path.open("w", newline="", encoding="utf-8") as handle:
+                    ordered = [rows_by_label[key] for key in sorted(rows_by_label)]
+                    writer = csv.DictWriter(handle, fieldnames=list(ordered[0]))
+                    writer.writeheader()
+                    writer.writerows(ordered)
+                state["metrics"] = sorted(rows_by_label)
+                _atomic_json(state_path, state)
+
+    rows = [rows_by_label[label] for label in labels]
     with (output / "metrics.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
+    state["metrics_complete"] = True
+    _atomic_json(state_path, state)
     print(f"[5/5] Tamamlandı: {output}", flush=True)
 
 
+def run(args: argparse.Namespace) -> None:
+    output = Path(args.output)
+    output.mkdir(parents=True, exist_ok=True)
+    lock_path = output / "pilot.lock"
+    try:
+        descriptor = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(descriptor, str(os.getpid()).encode("ascii"))
+        os.close(descriptor)
+    except FileExistsError as exc:
+        raise RuntimeError(f"Bu output klasörü zaten çalışıyor: {lock_path}") from exc
+    try:
+        _run(args, output)
+    finally:
+        lock_path.unlink(missing_ok=True)
+
+
 def parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(description="Run one rigid PhantomX registration pair")
+    ap = argparse.ArgumentParser(description="Run one resumable rigid PhantomX registration pair")
     ap.add_argument("--fixed-ct", required=True)
     ap.add_argument("--fixed-seg", required=True)
     ap.add_argument("--moving-ct", required=True)

@@ -21,3 +21,8 @@ outputs in the selected output folder.
 In the GUI, select the session folder containing `nifti` and `segmentation`,
 for example `PhantomX\\LABELED\\20260805_PCCT_Aorta_Spleen`, then click
 `Auto-fill take1/take2`. The CT and mask paths are derived from that folder.
+
+The pilot is resumable. It stores `pilot_state.json`, `metrics.partial.csv` and
+the registered artifacts in the output folder. Re-running with the same inputs
+continues from the first missing stage and refuses a second simultaneous run in
+the same output folder.

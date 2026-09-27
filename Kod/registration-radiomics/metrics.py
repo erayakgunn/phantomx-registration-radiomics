@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+import os
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import SimpleITK as sitk
@@ -69,21 +71,55 @@ def surface_metrics(
     return float(np.percentile(distances, 95)), float(np.mean(distances))
 
 
+def compare_label(
+    reference: sitk.Image,
+    candidate: sitk.Image,
+    label: int,
+    reference_array: np.ndarray | None = None,
+    candidate_array: np.ndarray | None = None,
+) -> dict[str, float | int]:
+    """Compare one label using a safe crop for the surface distance transform."""
+    if reference_array is None or candidate_array is None:
+        ref, cand = _arrays(reference, candidate, label)
+    else:
+        ref = reference_array == label
+        cand = candidate_array == label
+    occupied = np.argwhere(np.logical_or(ref, cand))
+    if not occupied.size:
+        hd95, assd = math.nan, math.nan
+    else:
+        low = np.maximum(occupied.min(axis=0) - 2, 0)
+        high = np.minimum(occupied.max(axis=0) + 3, np.array(ref.shape))
+        slices = tuple(slice(int(start), int(stop)) for start, stop in zip(low, high))
+        ref_small = ref[slices]
+        cand_small = cand[slices]
+        ref_surface = _surface(ref_small)
+        cand_surface = _surface(cand_small)
+        if not ref_surface.any() or not cand_surface.any():
+            hd95, assd = math.nan, math.nan
+        else:
+            sampling = tuple(reversed(reference.GetSpacing()))
+            ref_distance = distance_transform_edt(~ref_surface, sampling=sampling)
+            cand_distance = distance_transform_edt(~cand_surface, sampling=sampling)
+            distances = np.concatenate(
+                [cand_distance[ref_surface], ref_distance[cand_surface]]
+            )
+            hd95, assd = float(np.percentile(distances, 95)), float(np.mean(distances))
+    total = int(ref.sum()) + int(cand.sum())
+    return {
+        "label": int(label),
+        "dice": math.nan if total == 0 else 2.0 * float(np.logical_and(ref, cand).sum()) / total,
+        "centroid_displacement_mm": centroid_displacement(reference, candidate, label),
+        "hd95_mm": hd95,
+        "assd_mm": assd,
+    }
+
+
 def compare_labels(
     reference: sitk.Image, candidate: sitk.Image, labels: list[int]
 ) -> list[dict[str, float | int]]:
-    rows = []
-    for label in labels:
-        hd95, assd = surface_metrics(reference, candidate, label)
-        rows.append(
-            {
-                "label": int(label),
-                "dice": dice(reference, candidate, label),
-                "centroid_displacement_mm": centroid_displacement(
-                    reference, candidate, label
-                ),
-                "hd95_mm": hd95,
-                "assd_mm": assd,
-            }
-        )
-    return rows
+    if not labels:
+        return []
+    workers = min(max(1, os.cpu_count() or 1), len(labels))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(lambda label: compare_label(reference, candidate, label), labels))
