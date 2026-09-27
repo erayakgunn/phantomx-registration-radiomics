@@ -46,6 +46,16 @@ class RegistrationGui(tk.Tk):
             row=1, column=0, columnspan=3, sticky="w", pady=(0, 12)
         )
 
+        self.fields["dataset_root"] = tk.StringVar()
+        ttk.Label(container, text="Dataset root", width=16).grid(row=2, column=0, sticky="w", pady=4)
+        ttk.Entry(container, textvariable=self.fields["dataset_root"]).grid(
+            row=2, column=1, sticky="ew", padx=8, pady=4
+        )
+        ttk.Button(container, text="Browse", command=self._browse_dataset).grid(row=2, column=2, pady=4)
+        ttk.Button(container, text="Auto-fill take1/take2", command=self._autofill).grid(
+            row=3, column=1, sticky="w", padx=8, pady=(0, 8)
+        )
+
         rows = (
             ("Fixed CT", "fixed_ct"),
             ("Fixed mask", "fixed_seg"),
@@ -53,7 +63,7 @@ class RegistrationGui(tk.Tk):
             ("Moving mask", "moving_seg"),
             ("Output folder", "output"),
         )
-        for row, (label, key) in enumerate(rows, start=2):
+        for row, (label, key) in enumerate(rows, start=4):
             self.fields[key] = tk.StringVar()
             ttk.Label(container, text=label, width=16).grid(row=row, column=0, sticky="w", pady=4)
             ttk.Entry(container, textvariable=self.fields[key]).grid(
@@ -65,18 +75,18 @@ class RegistrationGui(tk.Tk):
 
         self.fields["labels"] = tk.StringVar(value="1 52")
         self.fields["registration_labels"] = tk.StringVar(value="1 52")
-        ttk.Label(container, text="Evaluation labels").grid(row=7, column=0, sticky="w", pady=4)
-        ttk.Entry(container, textvariable=self.fields["labels"]).grid(row=7, column=1, sticky="ew", padx=8, pady=4)
-        ttk.Label(container, text="örn. 1 52 = spleen, aorta").grid(row=7, column=2, sticky="w")
+        ttk.Label(container, text="Evaluation labels").grid(row=9, column=0, sticky="w", pady=4)
+        ttk.Entry(container, textvariable=self.fields["labels"]).grid(row=9, column=1, sticky="ew", padx=8, pady=4)
+        ttk.Label(container, text="örn. 1 52 = spleen, aorta").grid(row=9, column=2, sticky="w")
 
-        ttk.Label(container, text="Registration labels").grid(row=8, column=0, sticky="w", pady=4)
+        ttk.Label(container, text="Registration labels").grid(row=10, column=0, sticky="w", pady=4)
         ttk.Entry(container, textvariable=self.fields["registration_labels"]).grid(
-            row=8, column=1, sticky="ew", padx=8, pady=4
+            row=10, column=1, sticky="ew", padx=8, pady=4
         )
-        ttk.Label(container, text="Registration bölgesi; önce organlarla pilot yap").grid(row=8, column=2, sticky="w")
+        ttk.Label(container, text="Registration bölgesi; önce organlarla pilot yap").grid(row=10, column=2, sticky="w")
 
         controls = ttk.Frame(container)
-        controls.grid(row=9, column=0, columnspan=3, sticky="ew", pady=(12, 8))
+        controls.grid(row=11, column=0, columnspan=3, sticky="ew", pady=(12, 8))
         self.run_button = ttk.Button(controls, text="Run registration", command=self._start)
         self.run_button.pack(side="left")
         self.stop_button = ttk.Button(controls, text="Stop", command=self._stop, state="disabled")
@@ -86,11 +96,46 @@ class RegistrationGui(tk.Tk):
         self.progress.pack(side="right")
 
         self.status = tk.StringVar(value="Hazır")
-        ttk.Label(container, textvariable=self.status).grid(row=10, column=0, columnspan=3, sticky="w", pady=4)
+        ttk.Label(container, textvariable=self.status).grid(row=12, column=0, columnspan=3, sticky="w", pady=4)
 
         self.log = tk.Text(container, height=14, wrap="word", state="disabled")
-        self.log.grid(row=11, column=0, columnspan=3, sticky="nsew", pady=(8, 0))
-        container.rowconfigure(11, weight=1)
+        self.log.grid(row=13, column=0, columnspan=3, sticky="nsew", pady=(8, 0))
+        container.rowconfigure(13, weight=1)
+
+    def _browse_dataset(self) -> None:
+        value = filedialog.askdirectory(title="PhantomX LABELED dataset root")
+        if value:
+            self.fields["dataset_root"].set(value)
+            self._autofill()
+
+    def _autofill(self) -> None:
+        root = Path(self.fields["dataset_root"].get().strip())
+        ct_files = sorted(root.glob("nifti/*/ct.nii.gz"))
+        if not ct_files:
+            messagebox.showerror(
+                "Dataset bulunamadı",
+                "Kök klasörde nifti\\<seri>\\ct.nii.gz bulunamadı.",
+            )
+            return
+        take1 = next((p for p in ct_files if "_take1" in p.parent.name), None)
+        moving = None
+        if take1 is not None:
+            moving_name = take1.parent.name.replace("_take1", "_take2", 1)
+            moving_candidate = root / "nifti" / moving_name / "ct.nii.gz"
+            if moving_candidate.exists():
+                moving = moving_candidate
+        if take1 is None or moving is None:
+            take1, moving = ct_files[0], ct_files[1] if len(ct_files) > 1 else None
+        if moving is None:
+            messagebox.showerror("Seri eksik", "En az iki seri bulunamadı.")
+            return
+        self.fields["fixed_ct"].set(str(take1))
+        self.fields["moving_ct"].set(str(moving))
+        self.fields["fixed_seg"].set(str(root / "segmentation" / take1.parent.name / "seg.nii.gz"))
+        self.fields["moving_seg"].set(str(root / "segmentation" / moving.parent.name / "seg.nii.gz"))
+        if not self.fields["output"].get().strip():
+            self.fields["output"].set(str(ROOT / "PhantomX" / "REGISTRATION" / "gui_take1_take2"))
+        self._write_log(f"Otomatik seçildi: {take1.parent.name} -> {moving.parent.name}")
 
     def _browse(self, key: str) -> None:
         if key == "output":

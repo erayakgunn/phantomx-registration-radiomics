@@ -9,12 +9,20 @@ from __future__ import annotations
 
 import argparse
 import csv
+import sys
 from pathlib import Path
 
 import SimpleITK as sitk
 
 from metrics import compare_labels
 from registration import read_image, resample_image, resample_mask, rigid_register
+
+
+for stream in (sys.stdout, sys.stderr):
+    try:
+        stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 
 def label_union_mask(segmentation: sitk.Image, labels: list[int]) -> sitk.Image:

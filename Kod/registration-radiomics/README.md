@@ -17,3 +17,7 @@ To start the desktop monitor:
 
 The GUI runs the pilot in a background process, streams its log, and keeps all
 outputs in the selected output folder.
+
+In the GUI, select the session folder containing `nifti` and `segmentation`,
+for example `PhantomX\\LABELED\\20260805_PCCT_Aorta_Spleen`, then click
+`Auto-fill take1/take2`. The CT and mask paths are derived from that folder.
