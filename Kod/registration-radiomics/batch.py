@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -26,7 +27,7 @@ def series_files(session: Path) -> list[tuple[str, Path, Path]]:
     return result
 
 
-def main(args: argparse.Namespace) -> int:
+def _main(args: argparse.Namespace) -> int:
     dataset = args.dataset_root
     sessions = sorted(
         path for path in dataset.iterdir()
@@ -86,6 +87,29 @@ def main(args: argparse.Namespace) -> int:
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(f"[batch] tamamlandı: {manifest_path}", flush=True)
     return 0
+
+
+def main(args: argparse.Namespace) -> int:
+    args.output.mkdir(parents=True, exist_ok=True)
+    lock_path = args.output / "batch.lock"
+    try:
+        descriptor = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        try:
+            previous_pid = int(lock_path.read_text(encoding="ascii").strip())
+            os.kill(previous_pid, 0)
+        except (FileNotFoundError, ProcessLookupError, ValueError, PermissionError, OSError):
+            lock_path.unlink(missing_ok=True)
+            descriptor = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        else:
+            print(f"[batch] zaten çalışıyor: {lock_path}", flush=True)
+            return 2
+    os.write(descriptor, str(os.getpid()).encode("ascii"))
+    os.close(descriptor)
+    try:
+        return _main(args)
+    finally:
+        lock_path.unlink(missing_ok=True)
 
 
 def parser() -> argparse.ArgumentParser:
