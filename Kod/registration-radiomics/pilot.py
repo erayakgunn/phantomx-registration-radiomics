@@ -41,6 +41,13 @@ for stream in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
+try:
+    sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(
+        int(os.environ.get("PHANTOMX_SITK_THREADS", "1"))
+    )
+except Exception:
+    pass
+
 
 def label_union_mask(segmentation: sitk.Image, labels: list[int]) -> sitk.Image:
     array = sitk.GetArrayFromImage(segmentation)

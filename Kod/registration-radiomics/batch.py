@@ -32,7 +32,8 @@ def series_files(session: Path) -> list[tuple[str, Path, Path]]:
 
 
 def _process_pair(index: int, total: int, item, fixed_ct: Path,
-                  fixed_seg: Path, output: Path, labels: list[int]) -> dict:
+                  fixed_seg: Path, output: Path, labels: list[int],
+                  threads_per_process: int) -> dict:
     session, name, ct, seg = item
     pair_output = output / f"{session}__{name}"
     state_path = pair_output / "pilot_state.json"
@@ -56,7 +57,13 @@ def _process_pair(index: int, total: int, item, fixed_ct: Path,
         "--output", str(pair_output),
         "--labels", *[str(label) for label in labels],
     ]
-    result = subprocess.run(command, cwd=Path(__file__).parents[2])
+    environment = os.environ.copy()
+    environment["PHANTOMX_SITK_THREADS"] = str(threads_per_process)
+    result = subprocess.run(
+        command,
+        cwd=Path(__file__).parents[2],
+        env=environment,
+    )
     status = "completed" if result.returncode == 0 else f"failed:{result.returncode}"
     print(f"[batch {index}/{total}] sonuç: {status}", flush=True)
     return {"session": session, "series": name, "status": status}
@@ -90,11 +97,13 @@ def _main(args: argparse.Namespace) -> int:
     }
     manifest_path = args.output / "batch_manifest.json"
     total = len(moving)
+    threads_per_process = max(1, (os.cpu_count() or 4) // max(1, args.workers))
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         futures = {
             pool.submit(
                 _process_pair, index, total, item,
-                fixed_ct, fixed_seg, args.output, args.labels
+                fixed_ct, fixed_seg, args.output, args.labels,
+                threads_per_process,
             ): index
             for index, item in enumerate(moving, start=1)
         }
