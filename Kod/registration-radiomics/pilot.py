@@ -151,6 +151,7 @@ def _run(args: argparse.Namespace, output: Path) -> None:
         registered_ct = read_image(registered_ct_path, sitk.sitkFloat32)
         registered_seg = read_image(registered_seg_path, sitk.sitkUInt16)
     else:
+        registration_error = None
         fixed_stable_mask = label_union_mask(fixed_seg, registration_labels)
         moving_stable_mask = label_union_mask(moving_seg, registration_labels)
         moving_stable_on_fixed = resample_mask(
@@ -205,47 +206,57 @@ def _run(args: argparse.Namespace, output: Path) -> None:
                 fixed_registration_mask,
                 moving_registration_mask,
             )
-            candidate_transform = rigid_register(
-                registration_fixed_ct,
-                registration_moving_ct,
-                fixed_mask=fixed_registration_mask,
-                initial_transform=initial_transform,
-                metric=REGISTRATION_METRIC,
-            )
-            print("[3/5] Transform CT ve maskeye uygulanıyor", flush=True)
-            candidate_ct = resample_image(
-                moving_ct, fixed_ct, candidate_transform,
-                sitk.sitkLinear, default_value=-1024.0
-            )
-            candidate_seg = resample_mask(moving_seg, fixed_seg, candidate_transform)
-            candidate_stable = resample_mask(
-                moving_stable_mask, fixed_stable_mask, candidate_transform
-            )
-            stable_after = _stable_score(fixed_stable_mask, candidate_stable)
-            accepted = (
-                math.isfinite(float(stable_after["dice"]))
-                and float(stable_after["dice"]) >= float(stable_before["dice"])
-            )
-            candidate_transform_path = output / "candidate_moving_to_fixed.tfm"
-            sitk.WriteTransform(candidate_transform, str(candidate_transform_path))
-            if accepted:
-                transform = candidate_transform
-                registered_ct = candidate_ct
-                registered_seg = candidate_seg
-                print("[qc] Stabil kemik maskesi iyileşti; transform kabul edildi", flush=True)
-            else:
+            accepted = False
+            try:
+                candidate_transform = rigid_register(
+                    registration_fixed_ct,
+                    registration_moving_ct,
+                    fixed_mask=fixed_registration_mask,
+                    initial_transform=initial_transform,
+                    metric=REGISTRATION_METRIC,
+                )
+            except Exception as exc:  # noqa: BLE001
+                registration_error = repr(exc)
+                candidate_transform = None
+                print(f"[qc] Registration geçersiz: {exc}; identity kullanılıyor", flush=True)
+            if candidate_transform is not None:
+                print("[3/5] Transform CT ve maskeye uygulanıyor", flush=True)
+                candidate_ct = resample_image(
+                    moving_ct, fixed_ct, candidate_transform,
+                    sitk.sitkLinear, default_value=-1024.0
+                )
+                candidate_seg = resample_mask(moving_seg, fixed_seg, candidate_transform)
+                candidate_stable = resample_mask(
+                    moving_stable_mask, fixed_stable_mask, candidate_transform
+                )
+                stable_after = _stable_score(fixed_stable_mask, candidate_stable)
+                accepted = (
+                    math.isfinite(float(stable_after["dice"]))
+                    and float(stable_after["dice"]) >= float(stable_before["dice"])
+                )
+                candidate_transform_path = output / "candidate_moving_to_fixed.tfm"
+                sitk.WriteTransform(candidate_transform, str(candidate_transform_path))
+                if accepted:
+                    transform = candidate_transform
+                    registered_ct = candidate_ct
+                    registered_seg = candidate_seg
+                    print("[qc] Stabil kemik maskesi iyileşti; transform kabul edildi", flush=True)
+                else:
+                    print("[qc] Stabil kemik maskesi iyileşmedi; identity kullanılıyor", flush=True)
+            if candidate_transform is None or not accepted:
                 transform = sitk.Transform(3, sitk.sitkIdentity)
                 registered_ct = resample_image(
                     moving_ct, fixed_ct, transform,
                     sitk.sitkLinear, default_value=-1024.0
                 )
                 registered_seg = moving_seg_on_fixed
-                print("[qc] Stabil kemik maskesi iyileşmedi; identity kullanılıyor", flush=True)
+                stable_after = stable_before if candidate_transform is None else stable_after
         registration_qc = {
             "stable_before": stable_before,
             "stable_after": stable_after,
             "registration_attempted": max_displacement > args.skip_threshold_mm,
             "registration_accepted": accepted,
+            "registration_error": registration_error,
             "target_max_centroid_displacement_mm": max_displacement,
         }
         _atomic_json(output / "registration_qc.json", registration_qc)
@@ -312,10 +323,17 @@ def run(args: argparse.Namespace) -> None:
     lock_path = output / "pilot.lock"
     try:
         descriptor = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        os.write(descriptor, str(os.getpid()).encode("ascii"))
-        os.close(descriptor)
-    except FileExistsError as exc:
-        raise RuntimeError(f"Bu output klasörü zaten çalışıyor: {lock_path}") from exc
+    except FileExistsError:
+        try:
+            previous_pid = int(lock_path.read_text(encoding="ascii").strip())
+            os.kill(previous_pid, 0)
+        except (FileNotFoundError, ProcessLookupError, ValueError, PermissionError, OSError):
+            lock_path.unlink(missing_ok=True)
+            descriptor = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        else:
+            raise RuntimeError(f"Bu output klasörü zaten çalışıyor: {lock_path}")
+    os.write(descriptor, str(os.getpid()).encode("ascii"))
+    os.close(descriptor)
     try:
         _run(args, output)
     finally:

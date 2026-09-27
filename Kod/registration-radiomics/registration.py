@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import numpy as np
@@ -59,7 +60,14 @@ def rigid_register(
     method.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
     method.SetInitialTransform(initial, inPlace=False)
 
-    return method.Execute(fixed, moving)
+    result = method.Execute(fixed, moving)
+    metric_value = float(method.GetMetricValue())
+    if not math.isfinite(metric_value) or abs(metric_value) <= 1e-12:
+        raise RuntimeError(
+            "Registration metric produced no valid overlapping samples "
+            f"(value={metric_value})"
+        )
+    return result
 
 
 def centroid_initial_transform(
