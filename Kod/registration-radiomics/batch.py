@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 
@@ -28,6 +29,37 @@ def series_files(session: Path) -> list[tuple[str, Path, Path]]:
         if seg.exists():
             result.append((name, ct, seg))
     return result
+
+
+def _process_pair(index: int, total: int, item, fixed_ct: Path,
+                  fixed_seg: Path, output: Path, labels: list[int]) -> dict:
+    session, name, ct, seg = item
+    pair_output = output / f"{session}__{name}"
+    state_path = pair_output / "pilot_state.json"
+    print(f"[batch {index}/{total}] {session}/{name}", flush=True)
+    if state_path.exists():
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            state = {}
+        if state.get("metrics_complete") and state.get("workflow_version") == WORKFLOW_VERSION:
+            print(f"[batch {index}/{total}] tamamlanmış, atlanıyor", flush=True)
+            return {"session": session, "series": name, "status": "resumed"}
+
+    command = [
+        sys.executable,
+        str(Path(__file__).with_name("pilot.py")),
+        "--fixed-ct", str(fixed_ct),
+        "--fixed-seg", str(fixed_seg),
+        "--moving-ct", str(ct),
+        "--moving-seg", str(seg),
+        "--output", str(pair_output),
+        "--labels", *[str(label) for label in labels],
+    ]
+    result = subprocess.run(command, cwd=Path(__file__).parents[2])
+    status = "completed" if result.returncode == 0 else f"failed:{result.returncode}"
+    print(f"[batch {index}/{total}] sonuç: {status}", flush=True)
+    return {"session": session, "series": name, "status": status}
 
 
 def _main(args: argparse.Namespace) -> int:
@@ -58,36 +90,20 @@ def _main(args: argparse.Namespace) -> int:
     }
     manifest_path = args.output / "batch_manifest.json"
     total = len(moving)
-    for index, (session, name, ct, seg) in enumerate(moving, start=1):
-        pair_output = args.output / f"{session}__{name}"
-        state_path = pair_output / "pilot_state.json"
-        print(f"[batch {index}/{total}] {session}/{name}", flush=True)
-        if state_path.exists():
-            try:
-                state = json.loads(state_path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                state = {}
-            if state.get("metrics_complete") and state.get("workflow_version") == WORKFLOW_VERSION:
-                print("[batch]   tamamlanmış, atlanıyor", flush=True)
-                manifest["pairs"].append({"session": session, "series": name, "status": "resumed"})
-                continue
-
-        command = [
-            sys.executable,
-            str(Path(__file__).with_name("pilot.py")),
-            "--fixed-ct", str(fixed_ct),
-            "--fixed-seg", str(fixed_seg),
-            "--moving-ct", str(ct),
-            "--moving-seg", str(seg),
-            "--output", str(pair_output),
-            "--labels", *[str(label) for label in args.labels],
-        ]
-        result = subprocess.run(command, cwd=Path(__file__).parents[2])
-        status = "completed" if result.returncode == 0 else f"failed:{result.returncode}"
-        manifest["pairs"].append({"session": session, "series": name, "status": status})
-        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-        if result.returncode != 0 and args.stop_on_error:
-            return result.returncode
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        futures = {
+            pool.submit(
+                _process_pair, index, total, item,
+                fixed_ct, fixed_seg, args.output, args.labels
+            ): index
+            for index, item in enumerate(moving, start=1)
+        }
+        for future in as_completed(futures):
+            result = future.result()
+            manifest["pairs"].append(result)
+            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+            if result["status"].startswith("failed:") and args.stop_on_error:
+                return int(result["status"].split(":", 1)[1])
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(f"[batch] tamamlandı: {manifest_path}", flush=True)
     return 0
@@ -123,6 +139,7 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--labels", type=int, nargs="+", default=[1, 52])
     ap.add_argument("--limit", type=int)
+    ap.add_argument("--workers", type=int, default=2)
     ap.add_argument("--stop-on-error", action="store_true")
     return ap
 
