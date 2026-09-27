@@ -33,3 +33,13 @@ identity/world-coordinate result and skips rigid registration. Larger
 displacements use deterministic correlation-based rigid registration,
 initialized from vertebra/rib/sternum labels at 2 mm registration resolution;
 the final CT and masks remain on the original fixed grid.
+
+For a sequential batch run, use `batch.py`. It processes one pair at a time and
+reuses completed pair folders:
+
+```powershell
+..\.venv\Scripts\python.exe batch.py ..\..\PhantomX\LABELED `
+  --fixed-session 20260805_PCCT_Aorta_Spleen `
+  --output ..\..\PhantomX\REGISTRATION\batch_to_20260805 `
+  --limit 2
+```
