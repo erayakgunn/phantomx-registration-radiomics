@@ -28,6 +28,7 @@ DEFAULT_REGISTRATION_LABELS = (
     *range(92, 116),      # ribs
     116,                  # sternum
 )
+REGISTRATION_METRIC = "correlation"
 
 
 for stream in (sys.stdout, sys.stderr):
@@ -114,6 +115,7 @@ def _run(args: argparse.Namespace, output: Path) -> None:
         "labels": sorted(labels),
         "registration_labels": sorted(registration_labels),
         "registration_spacing": args.registration_spacing,
+        "registration_metric": REGISTRATION_METRIC,
         "skip_threshold_mm": args.skip_threshold_mm,
     }
     state_path = output / "pilot_state.json"
@@ -185,6 +187,7 @@ def _run(args: argparse.Namespace, output: Path) -> None:
                 registration_moving_ct,
                 fixed_mask=fixed_registration_mask,
                 initial_transform=initial_transform,
+                metric=REGISTRATION_METRIC,
             )
             print("[3/5] Transform CT ve maskeye uygulanıyor", flush=True)
             registered_ct = resample_image(

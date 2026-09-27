@@ -26,3 +26,10 @@ The pilot is resumable. It stores `pilot_state.json`, `metrics.partial.csv` and
 the registered artifacts in the output folder. Re-running with the same inputs
 continues from the first missing stage and refuses a second simultaneous run in
 the same output folder.
+
+For each pair, the pilot first compares masks in common DICOM world space. If
+the maximum selected-organ centroid displacement is at most 5 mm, it keeps the
+identity/world-coordinate result and skips rigid registration. Larger
+displacements use deterministic correlation-based rigid registration,
+initialized from vertebra/rib/sternum labels at 2 mm registration resolution;
+the final CT and masks remain on the original fixed grid.
