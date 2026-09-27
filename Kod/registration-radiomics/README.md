@@ -34,6 +34,11 @@ displacements use deterministic correlation-based rigid registration,
 initialized from vertebra/rib/sternum labels at 2 mm registration resolution;
 the final CT and masks remain on the original fixed grid.
 
+Registration is accepted only when the independent stable-structure mask
+(vertebrae, ribs and sternum) has a non-decreasing Dice score. The decision is
+recorded in `registration_qc.json`; target organ Dice values are not used to
+select a transform.
+
 For a sequential batch run, use `batch.py`. It processes one pair at a time and
 reuses completed pair folders:
 

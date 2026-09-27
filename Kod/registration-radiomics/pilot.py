@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -80,6 +81,18 @@ def _metric_row(fixed_seg: sitk.Image, moving_seg: sitk.Image,
     }
 
 
+def _stable_score(fixed_mask: sitk.Image, moving_mask: sitk.Image) -> dict:
+    fixed_array = sitk.GetArrayFromImage(fixed_mask)
+    moving_array = sitk.GetArrayFromImage(moving_mask)
+    return compare_label(
+        fixed_mask,
+        moving_mask,
+        1,
+        reference_array=fixed_array,
+        candidate_array=moving_array,
+    )
+
+
 def _run(args: argparse.Namespace, output: Path) -> None:
     print("[1/5] CT ve segmentation dosyaları okunuyor", flush=True)
     fixed_ct = read_image(Path(args.fixed_ct), sitk.sitkFloat32)
@@ -138,6 +151,14 @@ def _run(args: argparse.Namespace, output: Path) -> None:
         registered_ct = read_image(registered_ct_path, sitk.sitkFloat32)
         registered_seg = read_image(registered_seg_path, sitk.sitkUInt16)
     else:
+        fixed_stable_mask = label_union_mask(fixed_seg, registration_labels)
+        moving_stable_mask = label_union_mask(moving_seg, registration_labels)
+        moving_stable_on_fixed = resample_mask(
+            moving_stable_mask,
+            fixed_stable_mask,
+            sitk.Transform(3, sitk.sitkIdentity),
+        )
+        stable_before = _stable_score(fixed_stable_mask, moving_stable_on_fixed)
         baseline_displacements = [
             centroid_displacement(fixed_seg, moving_seg_on_fixed, label)
             for label in labels
@@ -158,6 +179,8 @@ def _run(args: argparse.Namespace, output: Path) -> None:
                 default_value=-1024.0,
             )
             registered_seg = moving_seg_on_fixed
+            stable_after = stable_before
+            accepted = False
         else:
             print("[2/5] Rigid registration başlatılıyor", flush=True)
             registration_fixed_ct = resample_for_registration(
@@ -182,7 +205,7 @@ def _run(args: argparse.Namespace, output: Path) -> None:
                 fixed_registration_mask,
                 moving_registration_mask,
             )
-            transform = rigid_register(
+            candidate_transform = rigid_register(
                 registration_fixed_ct,
                 registration_moving_ct,
                 fixed_mask=fixed_registration_mask,
@@ -190,12 +213,42 @@ def _run(args: argparse.Namespace, output: Path) -> None:
                 metric=REGISTRATION_METRIC,
             )
             print("[3/5] Transform CT ve maskeye uygulanıyor", flush=True)
-            registered_ct = resample_image(
-                moving_ct, fixed_ct, transform, sitk.sitkLinear, default_value=-1024.0
+            candidate_ct = resample_image(
+                moving_ct, fixed_ct, candidate_transform,
+                sitk.sitkLinear, default_value=-1024.0
             )
-            registered_seg = resample_mask(moving_seg, fixed_seg, transform)
-        if max_displacement <= args.skip_threshold_mm:
-            print("[3/5] Identity transform fixed grid üzerine uygulanıyor", flush=True)
+            candidate_seg = resample_mask(moving_seg, fixed_seg, candidate_transform)
+            candidate_stable = resample_mask(
+                moving_stable_mask, fixed_stable_mask, candidate_transform
+            )
+            stable_after = _stable_score(fixed_stable_mask, candidate_stable)
+            accepted = (
+                math.isfinite(float(stable_after["dice"]))
+                and float(stable_after["dice"]) >= float(stable_before["dice"])
+            )
+            candidate_transform_path = output / "candidate_moving_to_fixed.tfm"
+            sitk.WriteTransform(candidate_transform, str(candidate_transform_path))
+            if accepted:
+                transform = candidate_transform
+                registered_ct = candidate_ct
+                registered_seg = candidate_seg
+                print("[qc] Stabil kemik maskesi iyileşti; transform kabul edildi", flush=True)
+            else:
+                transform = sitk.Transform(3, sitk.sitkIdentity)
+                registered_ct = resample_image(
+                    moving_ct, fixed_ct, transform,
+                    sitk.sitkLinear, default_value=-1024.0
+                )
+                registered_seg = moving_seg_on_fixed
+                print("[qc] Stabil kemik maskesi iyileşmedi; identity kullanılıyor", flush=True)
+        registration_qc = {
+            "stable_before": stable_before,
+            "stable_after": stable_after,
+            "registration_attempted": max_displacement > args.skip_threshold_mm,
+            "registration_accepted": accepted,
+            "target_max_centroid_displacement_mm": max_displacement,
+        }
+        _atomic_json(output / "registration_qc.json", registration_qc)
         sitk.WriteTransform(transform, str(transform_path))
         _atomic_write_image(registered_ct, registered_ct_path)
         _atomic_write_image(registered_seg, registered_seg_path)
