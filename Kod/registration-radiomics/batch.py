@@ -10,6 +10,9 @@ import sys
 from pathlib import Path
 
 
+WORKFLOW_VERSION = 3
+
+
 for stream in (sys.stdout, sys.stderr):
     try:
         stream.reconfigure(encoding="utf-8", errors="replace")
@@ -63,7 +66,7 @@ def _main(args: argparse.Namespace) -> int:
                 state = json.loads(state_path.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
                 state = {}
-            if state.get("metrics_complete"):
+            if state.get("metrics_complete") and state.get("workflow_version") == WORKFLOW_VERSION:
                 print("[batch]   tamamlanmış, atlanıyor", flush=True)
                 manifest["pairs"].append({"session": session, "series": name, "status": "resumed"})
                 continue

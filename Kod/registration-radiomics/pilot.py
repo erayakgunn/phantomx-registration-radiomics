@@ -30,7 +30,7 @@ DEFAULT_REGISTRATION_LABELS = (
     116,                  # sternum
 )
 REGISTRATION_METRIC = "correlation"
-WORKFLOW_VERSION = 2
+WORKFLOW_VERSION = 3
 
 
 for stream in (sys.stdout, sys.stderr):
