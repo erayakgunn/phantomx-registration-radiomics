@@ -60,15 +60,20 @@ def _extract_mode(ct: Path, seg: Path, pair: str, mode: str) -> pd.DataFrame:
 def _process_pair(pair_dir: Path) -> dict:
     ct = pair_dir / "ct_registered.nii.gz"
     seg = pair_dir / "seg_registered.nii.gz"
+    if not ct.exists() or not seg.exists():
+        return {"pair": pair_dir.name, "status": "skipped_missing_input"}
     state_path = pair_dir / "features_registered_state.json"
     if state_path.exists():
         state = json.loads(state_path.read_text(encoding="utf-8"))
         if state.get("complete"):
             return {"pair": pair_dir.name, "status": "resumed"}
     frames = {}
-    for mode in config.MIRP_MODES:
-        frames[mode] = _extract_mode(ct, seg, pair_dir.name, mode)
-        frames[mode].to_csv(pair_dir / f"features_registered_{mode.lower()}.csv", index=False)
+    try:
+        for mode in config.MIRP_MODES:
+            frames[mode] = _extract_mode(ct, seg, pair_dir.name, mode)
+            frames[mode].to_csv(pair_dir / f"features_registered_{mode.lower()}.csv", index=False)
+    except Exception as exc:  # noqa: BLE001
+        return {"pair": pair_dir.name, "status": "failed", "error": repr(exc)}
     _atomic_json(
         state_path,
         {
@@ -99,7 +104,11 @@ def main(args: argparse.Namespace) -> int:
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(_process_pair, pair): pair for pair in pairs}
         for future in as_completed(futures):
-            result = future.result()
+            try:
+                result = future.result()
+            except Exception as exc:  # noqa: BLE001
+                pair = futures[future].name
+                result = {"pair": pair, "status": "failed", "error": repr(exc)}
             manifest["pairs"].append(result)
             print(f"[features] {result['status']}: {result['pair']}", flush=True)
             manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
