@@ -111,7 +111,7 @@ def main(args: argparse.Namespace) -> int:
                 result = {"pair": pair, "status": "failed", "error": repr(exc)}
             manifest["pairs"].append(result)
             print(f"[features] {result['status']}: {result['pair']}", flush=True)
-            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+            _atomic_json(manifest_path, manifest)
     for mode in config.MIRP_MODES:
         files = sorted(args.registration_root.glob(f"*/features_registered_{mode.lower()}.csv"))
         if files:
