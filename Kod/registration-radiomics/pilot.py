@@ -178,7 +178,7 @@ def _run(args: argparse.Namespace, output: Path) -> None:
         stable_before = _stable_score(fixed_stable_mask, moving_stable_on_fixed)
         registration_method = "identity"
         baseline_displacements = [
-            centroid_displacement(fixed_seg, moving_seg_on_fixed, label)
+            centroid_displacement(fixed_seg, moving_seg, label)
             for label in labels
         ]
         valid_displacements = [
