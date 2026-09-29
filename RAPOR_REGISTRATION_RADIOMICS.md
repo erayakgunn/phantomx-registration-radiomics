@@ -71,7 +71,170 @@ c2c34a6  FDR significance tests
 
 Kaynak CT, maskeler ve baseline feature tabloları değiştirilmedi.
 
-## 4. Oluşturulan Yazılım Bileşenleri
+## 4. Kullanılan Teknikler
+
+### 4.1 DICOM Fiziksel Koordinatları
+
+CT görüntülerindeki voxel index’leri tek başına fiziksel konumu ifade etmez.
+Her görüntünün fiziksel konumu; DICOM metadata içindeki origin, spacing ve
+direction bilgileriyle tanımlanır.
+
+Bu projede karşılaştırmalar mümkün olduğunca fiziksel/world-space üzerinden
+yapıldı. Böylece aynı voxel index’inde olmayan fakat gerçek fiziksel konumu
+bilinen organlar doğru koordinat sisteminde değerlendirilebildi.
+
+### 4.2 NIfTI
+
+DICOM serileri 3D `ct.nii.gz` dosyalarına dönüştürülmüş durumda. NIfTI dosyaları
+CT yoğunluklarını ve DICOM’dan taşınan fiziksel geometri bilgilerini içerir.
+
+Registration ve radyomik hesaplar NIfTI dosyaları üzerinden yapıldı; ham DICOM
+dosyaları değiştirilmedi.
+
+### 4.3 Multi-label Segmentation
+
+TotalSegmentator tek bir organ maskesi yerine çok etiketli bir segmentation
+üretir. Her integer label bir anatomik yapıyı temsil eder:
+
+```text
+1  = spleen
+52 = aorta
+```
+
+Registration sırasında stabil yapılar için vertebra, kaburga ve sternum
+etiketlerinin birleşiminden bağımsız bir QC maskesi oluşturuldu.
+
+### 4.4 Rigid Registration
+
+Rigid registration görüntüyü yalnızca altı serbestlik derecesiyle dönüştürür:
+
+- X, Y, Z yönlerinde translation
+- X, Y, Z eksenleri etrafında rotation
+
+Organın şeklini değiştirmez. Bu nedenle phantom repositioning ve table
+position gibi global konum farklarını düzeltmek için uygundur; segmentation
+şekil farklarını veya gerçek deformasyonu çözemez.
+
+CT registration için SimpleITK kullanıldı. Büyük konum farklarında registration
+2 mm geçici çözünürlükte çalıştırıldı; final CT ve maskeler fixed görüntünün
+orijinal grid’ine taşındı.
+
+### 4.5 Correlation Metric
+
+Aynı CT protokolündeki görüntüler için correlation similarity metric kullanıldı.
+Registration metric örneklemesi deterministic `REGULAR` olarak ayarlandı; bu
+aynı girdide rastgele farklı transformlar oluşmasını önler.
+
+### 4.6 Centroid Translation Fallback
+
+Bazı uzak oturumlarda CT görüntüleri başlangıçta yeterince örtüşmediği için
+intensity-based rigid optimizer geçerli örnek bulamadı. Bu durumda stabil
+vertebra/kaburga/sternum maskelerinin fiziksel centroid farkından doğrudan
+translation üretildi.
+
+Bu fallback, hedef organ maskelerini optimize etmek için değil, bağımsız stabil
+anatomik yapıların fiziksel konumunu eşitlemek için kullanıldı.
+
+### 4.7 Resampling ve Interpolation
+
+Görüntü resampling işlemleri için:
+
+- CT: linear interpolation
+- Label mask: nearest-neighbor interpolation
+
+Maskelerde nearest-neighbor zorunludur; aksi halde label değerleri arasında
+yapay fractional organ etiketleri oluşur.
+
+Radyomik hesaplarda MIRP ayrıca 1 mm isotropic resampling yapar. Bu nedenle
+registration’ın CT görüntüsüne ek interpolation etkisi oluşturabileceği ayrıca
+identity/world-space kontrolüyle incelendi.
+
+### 4.8 Radiomics
+
+MIRP 2.5.0 ve IBSI uyumlu sabit ayarlar kullanıldı:
+
+- 1 mm isotropic spacing
+- Tricubic interpolation
+- Anti-aliasing kapalı
+- Fixed bin width: 25 HU
+- Intensity range: `[-1300, 3100]`
+- Ayrı 2D ve 3D feature hesapları
+
+## 5. Dice Similarity Coefficient Nedir?
+
+Dice iki binary maskenin ne kadar aynı voxel bölgesini paylaştığını ölçer:
+
+```text
+Dice = 2 × |A ∩ B| / (|A| + |B|)
+```
+
+Burada:
+
+- `A`: fixed/reference organ maskesi
+- `B`: moving veya registered organ maskesi
+- `A ∩ B`: iki maskenin ortak kesişimi
+
+Dice aralığı:
+
+```text
+0.0 = hiç overlap yok
+1.0 = maskeler tamamen aynı
+```
+
+Örneğin:
+
+```text
+Dice = 0.90
+```
+
+iki organ maskesinin voxel hacimlerinin büyük bölümünün üst üste geldiğini
+gösterir.
+
+### 5.1 Dice Bu Projede Ne İfade Ediyor?
+
+Bu projede Dice, registration sonrasında longitudinal tekrarların aynı fiziksel
+organ bölgesini ne kadar iyi temsil ettiğini ölçer.
+
+Örnek:
+
+```text
+Spleen Dice: 0.26 → 0.92
+```
+
+Bu, moving spleen maskesinin reference spleen maskesiyle spatial overlap’ının
+registration sonrasında belirgin biçimde arttığını gösterir.
+
+### 5.2 Dice Ne İfade Etmez?
+
+Dice tek başına şunları kanıtlamaz:
+
+- TotalSegmentator segmentasyonunun anatomik olarak doğru olduğunu
+- Registration transformunun fiziksel olarak kesin doğru olduğunu
+- Radyomik feature’ların daha tekrarlanabilir hale geldiğini
+- Organ sınırlarının gerçek ground truth ile aynı olduğunu
+
+Bu nedenle Dice tek başına kullanılmadı. Yanına şu metrikler eklendi:
+
+- Centroid displacement: organ merkezleri arasındaki fiziksel mesafe, mm
+- HD95: yüzeyler arasındaki 95. percentile mesafe, mm
+- ASSD: ortalama simetrik yüzey mesafesi, mm
+- Stable-structure QC: vertebra/kaburga/sternum hizası
+
+### 5.3 Dice’ı Etkileyen Faktörler
+
+Dice aşağıdaki durumlardan etkilenebilir:
+
+- Phantom’ın farklı konumlandırılması
+- CT FOV kapsamı
+- Organın gerçekten farklı fiziksel konumda olması
+- TotalSegmentator’ın tekrarlar arasında farklı sınır çizmesi
+- Organın bir kısmının görüntü dışında kalması
+- Rigid registration’ın organ deformasyonlarını çözememesi
+
+Bu nedenle düşük Dice her zaman registration hatası anlamına gelmez; segmentation
+veya FOV problemi de olabilir.
+
+## 6. Oluşturulan Yazılım Bileşenleri
 
 ### Registration
 
@@ -150,7 +313,7 @@ Kullanılan temel MIRP ayarları:
 - `worldspace_baseline.py`
 - `compare_registered_worldspace.py`
 
-## 5. Registration Yaklaşımı
+## 7. Registration Yaklaşımı
 
 Her pair için tek bir global transform kullanılması amaçlandı. Organ başına
 ayrı transform kullanılmadı; aksi durumda organlar aynı ortak referans uzayına
@@ -194,7 +357,7 @@ Transform kabulü spleen/aorta Dice’ına göre yapılmadı. Bağımsız stabil
 
 Bu seçim, organ maskelerini doğrudan optimize edip sonra aynı maskelerle başarı
 
-## 6. Registration Sonuçları
+## 8. Registration Sonuçları
 
 Final registration batch:
 
@@ -240,7 +403,7 @@ registration_qc.json
 metrics.csv
 ```
 
-## 7. Radyomik Feature Sonuçları
+## 9. Radyomik Feature Sonuçları
 
 Registered feature çıktıları:
 
@@ -295,7 +458,7 @@ FDR düzeltilmiş Wilcoxon sonuçları:
 - İyileşme yönünde: 6
 - Kötüleşen/değişmeyen: 940
 
-## 8. Kritik Kontrol: Identity World-Space Baseline
+## 10. Kritik Kontrol: Identity World-Space Baseline
 
 Registration’ın etkisini interpolation etkisinden ayırmak için üçüncü analiz
 
@@ -329,7 +492,7 @@ analysis/worldspace_vs_registered_2d.csv
 
 Bu kontrol gereklidir; çünkü registration sonrası CT görüntüsü fixed grid’e
 
-## 9. Şu Anki Bilimsel Yorum
+## 11. Şu Anki Bilimsel Yorum
 
 Şu ana kadarki sonuçlar iki farklı bulgu gösteriyor:
 
@@ -347,7 +510,7 @@ Bu nedenle güvenli sonuç cümlesi şudur:
 > reproducibility is feature-dependent and can be confounded by interpolation
 > introduced during resampling.
 
-## 10. Henüz Yapılmayanlar
+## 12. Henüz Yapılmayanlar
 
 - World-space control feature extraction’ın 20260402 pair’leri için maske
   bulunamayan durumlarının ayrı exclusion raporu
@@ -364,7 +527,7 @@ Bu nedenle güvenli sonuç cümlesi şudur:
 - Final tablo ve figure üretimi
 - Companion organ-coordinate yöntemiyle aynı ölçütlerde karşılaştırma
 
-## 11. Sonraki Analiz Sırası
+## 13. Sonraki Analiz Sırası
 
 1. World-space ve registered feature tablolarını feature ailesine göre özetle.
 2. Sadece registration etkisini ölçmek için `B → C` karşılaştırmasını kullan.
