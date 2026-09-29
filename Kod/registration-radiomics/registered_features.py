@@ -35,7 +35,7 @@ def _atomic_json(path: Path, payload: dict) -> None:
     os.replace(temporary, path)
 
 
-def _extract_mode(ct: Path, seg: Path, pair: str, mode: str) -> pd.DataFrame:
+def _extract_mode(ct: Path, seg: Path, pair: str, mode: str, method: str) -> pd.DataFrame:
     result = mirp.extract_features(
         image=str(ct),
         mask=str(seg),
@@ -52,17 +52,18 @@ def _extract_mode(ct: Path, seg: Path, pair: str, mode: str) -> pd.DataFrame:
         raise RuntimeError(f"MIRP feature üretmedi: {pair} [{mode}]")
     frame = fx.drop_unreportable(pd.concat(result, ignore_index=True)).copy()
     frame.insert(0, "registration_pair", pair)
-    frame.insert(1, "analysis_method", "registration_based")
+    frame.insert(1, "analysis_method", method)
     frame.insert(2, "radiomics_mode", mode)
     return frame
 
 
-def _process_pair(pair_dir: Path) -> dict:
-    ct = pair_dir / "ct_registered.nii.gz"
-    seg = pair_dir / "seg_registered.nii.gz"
+def _process_pair(pair_dir: Path, image_name: str, mask_name: str,
+                  state_name: str, output_prefix: str, method: str) -> dict:
+    ct = pair_dir / image_name
+    seg = pair_dir / mask_name
     if not ct.exists() or not seg.exists():
         return {"pair": pair_dir.name, "status": "skipped_missing_input"}
-    state_path = pair_dir / "features_registered_state.json"
+    state_path = pair_dir / state_name
     if state_path.exists():
         state = json.loads(state_path.read_text(encoding="utf-8"))
         if state.get("complete"):
@@ -70,8 +71,8 @@ def _process_pair(pair_dir: Path) -> dict:
     frames = {}
     try:
         for mode in config.MIRP_MODES:
-            frames[mode] = _extract_mode(ct, seg, pair_dir.name, mode)
-            frames[mode].to_csv(pair_dir / f"features_registered_{mode.lower()}.csv", index=False)
+            frames[mode] = _extract_mode(ct, seg, pair_dir.name, mode, method)
+            frames[mode].to_csv(pair_dir / f"{output_prefix}_{mode.lower()}.csv", index=False)
     except Exception as exc:  # noqa: BLE001
         return {"pair": pair_dir.name, "status": "failed", "error": repr(exc)}
     _atomic_json(
@@ -89,11 +90,17 @@ def _process_pair(pair_dir: Path) -> dict:
 
 
 def main(args: argparse.Namespace) -> int:
+    if args.input_kind == "registered":
+        image_name, mask_name = "ct_registered.nii.gz", "seg_registered.nii.gz"
+        state_name, output_prefix, method = "features_registered_state.json", "features_registered", "registration_based"
+    else:
+        image_name, mask_name = "ct_worldspace.nii.gz", "seg_worldspace.nii.gz"
+        state_name, output_prefix, method = "features_worldspace_state.json", "features_worldspace", "worldspace_identity"
     pairs = sorted(
         path for path in args.registration_root.iterdir()
         if path.is_dir()
-        and (path / "ct_registered.nii.gz").exists()
-        and (path / "seg_registered.nii.gz").exists()
+        and (path / image_name).exists()
+        and (path / mask_name).exists()
     )
     if args.limit is not None:
         pairs = pairs[:args.limit]
@@ -102,7 +109,10 @@ def main(args: argparse.Namespace) -> int:
     manifest = {"n_candidates": len(pairs), "pairs": []}
     workers = max(1, args.workers)
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(_process_pair, pair): pair for pair in pairs}
+        futures = {
+            pool.submit(_process_pair, pair, image_name, mask_name, state_name, output_prefix, method): pair
+            for pair in pairs
+        }
         for future in as_completed(futures):
             try:
                 result = future.result()
@@ -113,11 +123,11 @@ def main(args: argparse.Namespace) -> int:
             print(f"[features] {result['status']}: {result['pair']}", flush=True)
             _atomic_json(manifest_path, manifest)
     for mode in config.MIRP_MODES:
-        files = sorted(args.registration_root.glob(f"*/features_registered_{mode.lower()}.csv"))
+        files = sorted(args.registration_root.glob(f"*/{output_prefix}_{mode.lower()}.csv"))
         if files:
             combined = pd.concat((pd.read_csv(path) for path in files), ignore_index=True)
             combined.to_csv(
-                args.registration_root / f"all_features_registered_{mode.lower()}.csv",
+                args.registration_root / f"all_features_{output_prefix.split('_', 1)[1]}_{mode.lower()}.csv",
                 index=False,
             )
     return 0
@@ -128,6 +138,7 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("registration_root", type=Path)
     ap.add_argument("--limit", type=int)
     ap.add_argument("--workers", type=int, default=1)
+    ap.add_argument("--input-kind", choices=("registered", "worldspace"), default="registered")
     return ap
 
 
