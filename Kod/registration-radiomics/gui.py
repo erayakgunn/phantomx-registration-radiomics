@@ -320,10 +320,16 @@ class RegistrationGui(tk.Tk):
             messagebox.showinfo("3D viewer", "Registered pair bulunamadı.")
             return
 
-        fixed_ct_path = Path(self.fields.get("fixed_ct", tk.StringVar()).get())
-        fixed_seg_path = Path(self.fields.get("fixed_seg", tk.StringVar()).get())
+        fixed_ct_path = Path(self.fields.get("fixed_ct", tk.StringVar()).get().strip())
+        fixed_seg_path = Path(self.fields.get("fixed_seg", tk.StringVar()).get().strip())
+        if not fixed_ct_path.is_file() or not fixed_seg_path.is_file():
+            dataset_root = Path(self.fields.get("dataset_root", tk.StringVar()).get().strip())
+            candidates = sorted(dataset_root.glob("nifti/*_take1/ct.nii.gz"))
+            if candidates:
+                fixed_ct_path = candidates[0]
+                fixed_seg_path = dataset_root / "segmentation" / fixed_ct_path.parent.name / "seg.nii.gz"
         if not fixed_ct_path.exists() or not fixed_seg_path.exists():
-            messagebox.showinfo("3D viewer", "Önce Dataset root seçip Auto-fill yapmalısın.")
+            messagebox.showinfo("3D viewer", "Dataset root veya fixed CT/mask bulunamadı.")
             return
 
         if self.qc_window is not None and self.qc_window.winfo_exists():
@@ -367,11 +373,15 @@ class RegistrationGui(tk.Tk):
             moving_seg_path = dataset_root / ".." / session / "segmentation" / series / "seg.nii.gz"
             if not moving_seg_path.exists():
                 moving_seg_path = ROOT / "PhantomX" / "LABELED" / session / "segmentation" / series / "seg.nii.gz"
-            loaded["ct"] = sitk.GetArrayFromImage(sitk.ReadImage(str(fixed_ct_path), sitk.sitkFloat32))
-            loaded["fixed"] = sitk.GetArrayFromImage(sitk.ReadImage(str(fixed_seg_path), sitk.sitkUInt16))
-            loaded["registered"] = sitk.GetArrayFromImage(
-                sitk.ReadImage(str(pair / "seg_registered.nii.gz"), sitk.sitkUInt16)
-            )
+            try:
+                loaded["ct"] = sitk.GetArrayFromImage(sitk.ReadImage(str(fixed_ct_path), sitk.sitkFloat32))
+                loaded["fixed"] = sitk.GetArrayFromImage(sitk.ReadImage(str(fixed_seg_path), sitk.sitkUInt16))
+                loaded["registered"] = sitk.GetArrayFromImage(
+                    sitk.ReadImage(str(pair / "seg_registered.nii.gz"), sitk.sitkUInt16)
+                )
+            except Exception as exc:  # noqa: BLE001
+                messagebox.showerror("3D viewer", f"Görüntü okunamadı:\n{exc}")
+                return
             shape = loaded["ct"].shape
             scales[0].configure(to=shape[0] - 1)
             scales[1].configure(to=shape[1] - 1)
