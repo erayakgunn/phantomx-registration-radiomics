@@ -94,6 +94,7 @@ class RegistrationGui(tk.Tk):
         self.stop_button = ttk.Button(controls, text="Stop", command=self._stop, state="disabled")
         self.stop_button.pack(side="left", padx=8)
         ttk.Button(controls, text="Open output", command=self._open_output).pack(side="left")
+        ttk.Button(controls, text="Open visual QC", command=self._open_visual_qc).pack(side="left", padx=8)
         self.progress = ttk.Progressbar(controls, mode="indeterminate", length=220)
         self.progress.pack(side="right")
 
@@ -230,6 +231,19 @@ class RegistrationGui(tk.Tk):
             subprocess.Popen(["explorer", str(output)])
         else:
             messagebox.showinfo("Output", "Henüz geçerli bir output klasörü yok.")
+
+    def _open_visual_qc(self) -> None:
+        output = Path(self.fields["output"].get())
+        candidates = [
+            output / "visual_qc",
+            output.parent / "visual_qc",
+            ROOT / "PhantomX" / "REGISTRATION" / "batch_to_20260805_v5" / "visual_qc",
+        ]
+        for folder in candidates:
+            if folder.is_dir():
+                subprocess.Popen(["explorer", str(folder)])
+                return
+        messagebox.showinfo("Visual QC", "Visual QC klasörü henüz bulunamadı.")
 
     def _poll_events(self) -> None:
         try:
