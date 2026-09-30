@@ -7,6 +7,7 @@ Run with the registration environment:
 from __future__ import annotations
 
 import queue
+import csv
 import subprocess
 import sys
 import threading
@@ -14,6 +15,7 @@ import tkinter as tk
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+from PIL import Image, ImageTk
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -30,6 +32,8 @@ class RegistrationGui(tk.Tk):
         self.process: subprocess.Popen[str] | None = None
         self.events: queue.Queue[tuple[str, str]] = queue.Queue()
         self.fields: dict[str, tk.StringVar] = {}
+        self.qc_window: tk.Toplevel | None = None
+        self.qc_photo: ImageTk.PhotoImage | None = None
         self._build()
         self.after(100, self._poll_events)
 
@@ -94,7 +98,7 @@ class RegistrationGui(tk.Tk):
         self.stop_button = ttk.Button(controls, text="Stop", command=self._stop, state="disabled")
         self.stop_button.pack(side="left", padx=8)
         ttk.Button(controls, text="Open output", command=self._open_output).pack(side="left")
-        ttk.Button(controls, text="Open visual QC", command=self._open_visual_qc).pack(side="left", padx=8)
+        ttk.Button(controls, text="Visual QC viewer", command=self._open_visual_qc).pack(side="left", padx=8)
         self.progress = ttk.Progressbar(controls, mode="indeterminate", length=220)
         self.progress.pack(side="right")
 
@@ -241,9 +245,66 @@ class RegistrationGui(tk.Tk):
         ]
         for folder in candidates:
             if folder.is_dir():
-                subprocess.Popen(["explorer", str(folder)])
+                self._show_qc_viewer(folder)
                 return
         messagebox.showinfo("Visual QC", "Visual QC klasörü henüz bulunamadı.")
+
+    def _show_qc_viewer(self, folder: Path) -> None:
+        metrics_path = folder / "visual_qc_metrics.csv"
+        pngs = sorted(folder.glob("*.png"))
+        if not pngs:
+            messagebox.showinfo("Visual QC", "Bu klasörde PNG raporu bulunamadı.")
+            return
+        rows_by_pair: dict[str, list[dict[str, str]]] = {}
+        if metrics_path.exists():
+            with metrics_path.open(newline="", encoding="utf-8") as handle:
+                for row in csv.DictReader(handle):
+                    rows_by_pair.setdefault(row["pair"], []).append(row)
+
+        if self.qc_window is not None and self.qc_window.winfo_exists():
+            self.qc_window.destroy()
+        self.qc_window = tk.Toplevel(self)
+        self.qc_window.title("PhantomX Visual QC")
+        self.qc_window.geometry("1350x900")
+        self.qc_window.columnconfigure(0, weight=1)
+        self.qc_window.rowconfigure(2, weight=1)
+
+        pair_names = [path.stem for path in pngs]
+        selected = tk.StringVar(value=pair_names[0])
+        ttk.Label(self.qc_window, text="Pair seç:").grid(row=0, column=0, sticky="w", padx=10, pady=8)
+        selector = ttk.Combobox(
+            self.qc_window, textvariable=selected, values=pair_names,
+            state="readonly", width=120,
+        )
+        selector.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 8))
+        image_label = ttk.Label(self.qc_window)
+        image_label.grid(row=2, column=0, sticky="nsew", padx=10)
+        info = tk.Text(self.qc_window, height=7, wrap="word", state="disabled")
+        info.grid(row=3, column=0, sticky="ew", padx=10, pady=8)
+
+        def render(*_event) -> None:
+            pair = selected.get()
+            path = folder / f"{pair}.png"
+            if not path.exists():
+                return
+            image = Image.open(path).convert("RGB")
+            image.thumbnail((1280, 700), Image.Resampling.LANCZOS)
+            self.qc_photo = ImageTk.PhotoImage(image)
+            image_label.configure(image=self.qc_photo)
+            lines = [f"Pair: {pair}", ""]
+            for row in rows_by_pair.get(pair, []):
+                lines.append(
+                    f"{row['organ']}: Dice {float(row['before_dice']):.4f} -> "
+                    f"{float(row['after_dice']):.4f} | "
+                    f"HD95 {float(row['before_hd95_mm']):.2f} -> {float(row['after_hd95_mm']):.2f} mm"
+                )
+            info.configure(state="normal")
+            info.delete("1.0", "end")
+            info.insert("end", "\n".join(lines))
+            info.configure(state="disabled")
+
+        selector.bind("<<ComboboxSelected>>", render)
+        render()
 
     def _poll_events(self) -> None:
         try:
