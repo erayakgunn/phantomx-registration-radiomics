@@ -16,6 +16,8 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from PIL import Image, ImageTk
+import numpy as np
+import SimpleITK as sitk
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -99,6 +101,7 @@ class RegistrationGui(tk.Tk):
         self.stop_button.pack(side="left", padx=8)
         ttk.Button(controls, text="Open output", command=self._open_output).pack(side="left")
         ttk.Button(controls, text="Visual QC viewer", command=self._open_visual_qc).pack(side="left", padx=8)
+        ttk.Button(controls, text="3D volume viewer", command=self._show_volume_viewer).pack(side="left")
         self.progress = ttk.Progressbar(controls, mode="indeterminate", length=220)
         self.progress.pack(side="right")
 
@@ -305,6 +308,111 @@ class RegistrationGui(tk.Tk):
 
         selector.bind("<<ComboboxSelected>>", render)
         render()
+
+    def _show_volume_viewer(self) -> None:
+        root = ROOT / "PhantomX" / "REGISTRATION" / "batch_to_20260805_v5"
+        pair_dirs = sorted(
+            path for path in root.iterdir()
+            if path.is_dir() and "__" in path.name
+            and (path / "seg_registered.nii.gz").exists()
+        ) if root.is_dir() else []
+        if not pair_dirs:
+            messagebox.showinfo("3D viewer", "Registered pair bulunamadı.")
+            return
+
+        fixed_ct_path = Path(self.fields.get("fixed_ct", tk.StringVar()).get())
+        fixed_seg_path = Path(self.fields.get("fixed_seg", tk.StringVar()).get())
+        if not fixed_ct_path.exists() or not fixed_seg_path.exists():
+            messagebox.showinfo("3D viewer", "Önce Dataset root seçip Auto-fill yapmalısın.")
+            return
+
+        if self.qc_window is not None and self.qc_window.winfo_exists():
+            self.qc_window.destroy()
+        window = tk.Toplevel(self)
+        self.qc_window = window
+        window.title("PhantomX 3D Volume Viewer")
+        window.geometry("1400x900")
+        window.columnconfigure(0, weight=1)
+        window.rowconfigure(2, weight=1)
+
+        names = [path.name for path in pair_dirs]
+        selected = tk.StringVar(value=names[0])
+        ttk.Label(window, text="Registered pair").grid(row=0, column=0, sticky="w", padx=10, pady=6)
+        selector = ttk.Combobox(window, textvariable=selected, values=names, state="readonly", width=120)
+        selector.grid(row=1, column=0, sticky="ew", padx=10, pady=6)
+        panels = ttk.Frame(window)
+        panels.grid(row=2, column=0, sticky="nsew", padx=10)
+        for column in range(3):
+            panels.columnconfigure(column, weight=1)
+        image_labels = [ttk.Label(panels) for _ in range(3)]
+        for column, label in enumerate(image_labels):
+            label.grid(row=0, column=column, sticky="nsew", padx=5)
+        scales = []
+        scale_frame = ttk.Frame(window)
+        scale_frame.grid(row=3, column=0, sticky="ew", padx=10, pady=8)
+        for column, text in enumerate(("Axial", "Coronal", "Sagittal")):
+            ttk.Label(scale_frame, text=text).grid(row=0, column=column, sticky="w")
+            scale = tk.Scale(scale_frame, orient="horizontal", from_=0, to=1, showvalue=True,
+                             resolution=1, command=lambda _value: render())
+            scale.grid(row=1, column=column, sticky="ew", padx=5)
+            scale_frame.columnconfigure(column, weight=1)
+            scales.append(scale)
+
+        loaded: dict[str, object] = {}
+
+        def load_pair() -> None:
+            pair = next(path for path in pair_dirs if path.name == selected.get())
+            session, series = pair.name.split("__", 1)
+            dataset_root = Path(self.fields["dataset_root"].get())
+            moving_seg_path = dataset_root / ".." / session / "segmentation" / series / "seg.nii.gz"
+            if not moving_seg_path.exists():
+                moving_seg_path = ROOT / "PhantomX" / "LABELED" / session / "segmentation" / series / "seg.nii.gz"
+            loaded["ct"] = sitk.GetArrayFromImage(sitk.ReadImage(str(fixed_ct_path), sitk.sitkFloat32))
+            loaded["fixed"] = sitk.GetArrayFromImage(sitk.ReadImage(str(fixed_seg_path), sitk.sitkUInt16))
+            loaded["registered"] = sitk.GetArrayFromImage(
+                sitk.ReadImage(str(pair / "seg_registered.nii.gz"), sitk.sitkUInt16)
+            )
+            shape = loaded["ct"].shape
+            scales[0].configure(to=shape[0] - 1)
+            scales[1].configure(to=shape[1] - 1)
+            scales[2].configure(to=shape[2] - 1)
+            scales[0].set(shape[0] // 2)
+            scales[1].set(shape[1] // 2)
+            scales[2].set(shape[2] // 2)
+            render()
+
+        def render() -> None:
+            if "ct" not in loaded:
+                return
+            ct = loaded["ct"]
+            fixed = loaded["fixed"]
+            registered = loaded["registered"]
+            indices = [int(scale.get()) for scale in scales]
+            slices = [
+                (ct[indices[0]], fixed[indices[0]], registered[indices[0]]),
+                (ct[:, indices[1], :], fixed[:, indices[1], :], registered[:, indices[1], :]),
+                (ct[:, :, indices[2]], fixed[:, :, indices[2]], registered[:, :, indices[2]]),
+            ]
+            for label_widget, (image, fixed_mask, registered_mask) in zip(image_labels, slices):
+                image = np.rot90(image)
+                fixed_mask = np.rot90(fixed_mask)
+                registered_mask = np.rot90(registered_mask)
+                low, high = 40.0 - 200.0, 40.0 + 200.0
+                base = np.clip((image - low) / (high - low) * 255.0, 0, 255).astype(np.uint8)
+                rgb = np.repeat(base[:, :, None], 3, axis=2)
+                fixed_area = (fixed_mask == 1) | (fixed_mask == 52)
+                registered_area = (registered_mask == 1) | (registered_mask == 52)
+                rgb[fixed_area] = [0, 255, 0]
+                rgb[registered_area] = [255, 0, 0]
+                rgb[fixed_area & registered_area] = [255, 255, 0]
+                pil = Image.fromarray(rgb).convert("RGB")
+                pil.thumbnail((430, 620), Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(pil)
+                label_widget.configure(image=photo)
+                label_widget.image = photo
+
+        selector.bind("<<ComboboxSelected>>", lambda _event: load_pair())
+        load_pair()
 
     def _poll_events(self) -> None:
         try:
