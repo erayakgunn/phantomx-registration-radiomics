@@ -328,7 +328,13 @@ class RegistrationGui(tk.Tk):
             if candidates:
                 fixed_ct_path = candidates[0]
                 fixed_seg_path = dataset_root / "segmentation" / fixed_ct_path.parent.name / "seg.nii.gz"
-        if not fixed_ct_path.exists() or not fixed_seg_path.exists():
+        if not fixed_ct_path.is_file() or not fixed_seg_path.is_file():
+            fallback_root = ROOT / "PhantomX" / "LABELED" / "20260805_PCCT_Aorta_Spleen"
+            candidates = sorted(fallback_root.glob("nifti/*_take1/ct.nii.gz"))
+            if candidates:
+                fixed_ct_path = candidates[0]
+                fixed_seg_path = fallback_root / "segmentation" / fixed_ct_path.parent.name / "seg.nii.gz"
+        if not fixed_ct_path.is_file() or not fixed_seg_path.is_file():
             messagebox.showinfo("3D viewer", "Dataset root veya fixed CT/mask bulunamadı.")
             return
 
