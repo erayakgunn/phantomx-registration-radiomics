@@ -242,17 +242,7 @@ class RegistrationGui(tk.Tk):
             messagebox.showinfo("Output", "Henüz geçerli bir output klasörü yok.")
 
     def _open_visual_qc(self) -> None:
-        output = Path(self.fields["output"].get())
-        candidates = [
-            output / "visual_qc",
-            output.parent / "visual_qc",
-            ROOT / "PhantomX" / "REGISTRATION" / "batch_to_20260805_v5" / "visual_qc",
-        ]
-        for folder in candidates:
-            if folder.is_dir():
-                self._show_qc_viewer(folder)
-                return
-        messagebox.showinfo("Visual QC", "Visual QC klasörü henüz bulunamadı.")
+        self._show_volume_viewer()
 
     def _show_qc_viewer(self, folder: Path) -> None:
         metrics_path = folder / "visual_qc_metrics.csv"
@@ -383,14 +373,14 @@ class RegistrationGui(tk.Tk):
 
         loaded: dict[str, object] = {}
 
-        def rotation_only(transform_path: Path) -> sitk.Transform:
+        def rotation_only(transform_path: Path, fixed_image: sitk.Image) -> sitk.Transform:
             source = sitk.ReadTransform(str(transform_path))
             if isinstance(source, sitk.CompositeTransform):
                 source = source.GetNthTransform(0)
             parameters = source.GetParameters()
             transform = sitk.Euler3DTransform()
-            center_index = [(size - 1) / 2.0 for size in fixed_ct_image.GetSize()]
-            transform.SetCenter(fixed_ct_image.TransformContinuousIndexToPhysicalPoint(center_index))
+            center_index = [(size - 1) / 2.0 for size in fixed_image.GetSize()]
+            transform.SetCenter(fixed_image.TransformContinuousIndexToPhysicalPoint(center_index))
             transform.SetParameters((parameters[0], parameters[1], parameters[2], 0.0, 0.0, 0.0))
             return transform
 
@@ -425,7 +415,7 @@ class RegistrationGui(tk.Tk):
                 }
                 candidate = pair / "candidate_moving_to_fixed.tfm"
                 if candidate.exists():
-                    transforms["rotation_only"] = rotation_only(candidate)
+                    transforms["rotation_only"] = rotation_only(candidate, fixed_ct_image)
                 else:
                     transforms["rotation_only"] = identity
                 loaded["masks"] = {
