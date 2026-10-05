@@ -234,6 +234,22 @@ Dice aşağıdaki durumlardan etkilenebilir:
 Bu nedenle düşük Dice her zaman registration hatası anlamına gelmez; segmentation
 veya FOV problemi de olabilir.
 
+### 5.4 Dice Eşiği ve Gözlenen Segmentation Tavanı
+
+Aynı oturumdaki farklı çekimlerin TotalSegmentator maskeleri pairwise olarak
+karşılaştırıldı. Gözlenen en yüksek Dice:
+
+- Spleen: `0.9962`
+- Aorta: `0.9892`
+
+Bu veri ve mevcut otomatik segmentation için her iki organda zorunlu
+`Dice >= 0.99` kriteri gerçekçi değildir; aorta aynı oturum içindeki maskeler
+arasında dahi bu değere ulaşmamıştır. Bu nedenle 0.99 ulaşılması gereken bir
+optimizasyon hedefi olarak kullanılmamalı; raporlanacak ideal bir eşik olarak
+belirtilmelidir. Transform kabulü bağımsız stabil anatomik yapı QC’sine dayanır.
+
+Tavan analizi dosyası: `PhantomX/REGISTRATION/segmentation_ceiling.csv`.
+
 ## 6. Oluşturulan Yazılım Bileşenleri
 
 ### Registration
@@ -343,6 +359,7 @@ Target organ centroid displacement > 5 mm
     → rigid registration dene
 
 Rigid başarısız veya stabil QC kötü
+    → landmark rigid (Kabsch) fallback
     → stabil kemik centroid translation fallback
 
 Fallback de başarısız
@@ -350,50 +367,80 @@ Fallback de başarısız
 ```
 
 Transform kabulü spleen/aorta Dice’ına göre yapılmadı. Bağımsız stabil yapı
+maskesi kullanıldı:
 
 - Vertebrae
 - Ribs
 - Sternum
 
-Bu seçim, organ maskelerini doğrudan optimize edip sonra aynı maskelerle başarı
+Rigid/landmark/translation adaylarının kabulü için stabil mask Dice’ı artmalı;
+centroid displacement, HD95 ve ASSD de belirlenen toleranslar içinde kalmalıdır.
+Bu, organ maskeleri üzerinde doğrudan optimizasyon yapıp yine aynı maskelerle
+başarı ölçme riskini azaltır.
 
 ## 8. Registration Sonuçları
 
-Final registration batch:
+Final registration batch (V6):
 
 ```text
-PhantomX/REGISTRATION/batch_to_20260805_v5/
+PhantomX/REGISTRATION/batch_to_20260805_v6/
 ```
 
-Toplam pair:
+Her pair için PNG overlay görselleri:
 
-88
+```text
+PhantomX/REGISTRATION/batch_to_20260805_v6/visual_qc/
 ```
 
-Final batch sonuç özeti:
+GUI’de `Visual QC viewer` ve `3D volume viewer` bu V6 sonuçlarını gösterir.
 
-- Spleen ortalama Dice: `0.2566 → 0.9159`
-- Aorta ortalama Dice: `0.2604 → 0.8958`
+Toplam pair: `88`
+```
+
+V6 final batch sonuç özeti:
+
+- Spleen ortalama Dice: `0.2566 → 0.9551`
+- Aorta ortalama Dice: `0.2604 → 0.9229`
 - Spleen için sıfır Dice pair: `0`
 - Aorta için sıfır Dice pair: `0`
-- Centroid translation fallback kullanılan pair: `79`
+- Landmark rigid (Kabsch) fallback kullanılan pair: `78`
 - Identity kullanılan pair: `9`
-- Registration exception: `0`
+- Rigid registration kullanılan pair: `1`
+- Sıfır target Dice kalan pair: `0`
+
+V6’da rigid/landmark/translation transformu, stabil yapı QC’sinde Dice artışına
+ek olarak centroid displacement, HD95 ve ASSD’nin belirlenen küçük toleranslarda
+kalmış olmasını gerektirir. Bu daha sıkı kural, V6’daki en kötü pair
+(`20260211 take3`) için rigid transformu reddedip landmark rigid fallback’i
+kullandı.
 
 En problemli örneklerde fallback etkisi:
 
 ```text
 20260304 take1
-Spleen Dice: 0.000 → 0.934
-Aorta Dice:  0.000 → 0.927
+Spleen Dice: 0.000 → 0.964
+Aorta Dice:  0.000 → 0.925
 
 20260526 take5
-Spleen Dice: 0.000 → 0.872
-Aorta Dice:  0.000 → 0.872
+Spleen Dice: 0.000 → 0.965
+Aorta Dice:  0.000 → 0.923
 
 20260327 take1
-Spleen Dice: 0.000 → 0.837
-Aorta Dice:  0.000 → 0.887
+Spleen Dice: 0.000 → 0.964
+Aorta Dice:  0.000 → 0.932
+```
+
+Landmark fallback, aynı label ile eşleşen stabil yapılardaki fiziksel centroid
+noktalarını kullanarak rigid rotation+translation kestirir (Kabsch/SVD). V6’da
+QC kuralı sıkılaştırıldı: stabil yapı Dice’ı artmalı; centroid displacement,
+HD95 ve ASSD de küçük belirlenmiş toleransları aşmamalıdır. Bu nedenle
+`20260211 take3` için önceki optimizer rigid sonucu reddedilip landmark rigid
+fallback ile yeniden hesaplandı.
+
+V6 için her pair’in tüm 2D kesit görselleri:
+
+```text
+PhantomX/REGISTRATION/batch_to_20260805_v6/visual_qc/
 ```
 
 Her pair için kullanılan yöntem ve QC:
@@ -405,7 +452,7 @@ metrics.csv
 
 ## 9. Radyomik Feature Sonuçları
 
-Registered feature çıktıları:
+V6 registered feature çıktıları:
 
 ```text
 all_features_registered_3d.csv
@@ -428,35 +475,40 @@ analysis/repeatability_comparison_3d.csv
 analysis/repeatability_comparison_2d.csv
 ```
 
-İlk sonuçlar:
+V6 session-aware repeatability sonuçları (88 pair, 22 oturum):
 
 3D feature’lar:
 
 - Toplam karşılaştırma: 434 feature/organ kombinasyonu
-- CV iyileşen: 50
-- Pairwise fark iyileşen: 56
-- İkisi birden iyileşen: 41
+- CV iyileşen: 107
+- Pairwise fark iyileşen: 94
+- İkisi birden iyileşen: 73
 
 2D feature’lar:
 
 - Toplam karşılaştırma: 706 feature/organ kombinasyonu
-- CV iyileşen: 52
-- Pairwise fark iyileşen: 55
-- İkisi birden iyileşen: 43
+- CV iyileşen: 129
+- Pairwise fark iyileşen: 127
+- İkisi birden iyileşen: 96
+
+FDR-significant tekrar edilebilirlik testleri içinde:
+
+- 3D: 58 anlamlı test; 11 iyileşme, 47 kötüleşme yönünde
+- 2D: 211 anlamlı test; 18 iyileşme, 193 kötüleşme yönünde
 
 FDR düzeltilmiş Wilcoxon sonuçları:
 
 3D:
 
-- FDR-significant test: 501
-- İyileşme yönünde: 7
-- Kötüleşen/değişmeyen: 494
+- FDR-significant test: 58
+- İyileşme yönünde: 11
+- Kötüleşen/değişmeyen: 47
 
 2D:
 
-- FDR-significant test: 946
-- İyileşme yönünde: 6
-- Kötüleşen/değişmeyen: 940
+- FDR-significant test: 211
+- İyileşme yönünde: 18
+- Kötüleşen/değişmeyen: 193
 
 ## 10. Kritik Kontrol: Identity World-Space Baseline
 
@@ -490,7 +542,19 @@ analysis/worldspace_vs_registered_3d.csv
 analysis/worldspace_vs_registered_2d.csv
 ```
 
+World-space kontrol feature’ları V5’teki identity-resampled CT/maskelerden
+alındı; bu görüntüler registration’dan bağımsızdır ve V6 referansı/ham girdileri
+aynı olduğundan V6 registered tablolarıyla eşleştirildi. Bu kontrol için 85 pair
+ortak feature üretti; 20260402 oturumundaki üç pair’de identity fixed-grid maskesi
+spleen/aorta ROI’si içermediği için MIRP feature’ı üretilemedi.
+
+World-space→V6 registered karşılaştırmasında median relative feature farkı 3D’de
+`0.107`, 2D’de `0.0769` oldu. Bu değerler feature ölçeklerinden etkilendiği için
+tek başına başarı metriği değildir; feature ailesi ve organ bazında
+yorumlanmalıdır.
+
 Bu kontrol gereklidir; çünkü registration sonrası CT görüntüsü fixed grid’e
+yeniden örneklenir ve interpolation texture feature’larını değiştirebilir.
 
 ## 11. Şu Anki Bilimsel Yorum
 
@@ -503,6 +567,12 @@ Bu kontrol gereklidir; çünkü registration sonrası CT görüntüsü fixed gri
 Bazı feature’lar registration sonrası daha kararlı hale gelirken bazı texture
 feature’ları resampling nedeniyle daha fazla değişmektedir.
 
+V6’da geometrik iyileşme belirgin olmakla birlikte, feature reproducibility
+sonuçları feature’a göre değişmektedir. World-space ile registered feature’ların
+medyan relative farkı 3D’de yaklaşık `0.107`, 2D’de `0.077` bulundu. Bu fark
+registration etkisi ile resampling/interpolation etkisinin birlikte bulunduğunu
+gösterir; iki etki B→C kontrolüyle ayrıca raporlanmalıdır.
+
 Bu nedenle güvenli sonuç cümlesi şudur:
 
 > Registration-based spatial standardization substantially improves geometric
@@ -512,8 +582,7 @@ Bu nedenle güvenli sonuç cümlesi şudur:
 
 ## 12. Henüz Yapılmayanlar
 
-- World-space control feature extraction’ın 20260402 pair’leri için maske
-  bulunamayan durumlarının ayrı exclusion raporu
+- World-space kontrolünde ROI içermeyen üç 20260402 pair’i için exclusion raporu
 - Feature ailelerine göre sonuçların gruplanması:
   - Shape
   - First-order
@@ -529,11 +598,10 @@ Bu nedenle güvenli sonuç cümlesi şudur:
 
 ## 13. Sonraki Analiz Sırası
 
-1. World-space ve registered feature tablolarını feature ailesine göre özetle.
-2. Sadece registration etkisini ölçmek için `B → C` karşılaştırmasını kullan.
-3. FDR-significant feature’ları improved/worsened olarak ayır.
-4. Spleen ve aorta sonuçlarını ayrı raporla.
-5. Same-session ve cross-session sonuçlarını ayrı tablolarda göster.
-6. Companion organ-coordinate yöntemiyle ICC, CV ve pairwise farkları karşılaştır.
-7. Son kararı feature bazında ver; registration’ın tüm feature’lar için tek tip
-   faydalı veya zararlı olduğunu varsayma.
+1. `B → C` farklarını feature ailesi ve organ bazında özetle.
+2. FDR sonuçlarını near-zero ve numerik açıdan kararsız feature’ları işaretleyerek
+   yeniden sun.
+3. Spleen ve aorta; aynı oturum ve farklı oturum sonuçlarını ayrı raporla.
+4. Companion organ-coordinate yöntemiyle aynı metriklerde karşılaştır.
+5. Registration’ın hangi feature’larda faydalı olduğunu feature bazında belirle;
+   tüm feature’lar için tek tip fayda varsayma.

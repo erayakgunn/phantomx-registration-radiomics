@@ -302,7 +302,7 @@ class RegistrationGui(tk.Tk):
         render()
 
     def _show_volume_viewer(self) -> None:
-        root = ROOT / "PhantomX" / "REGISTRATION" / "batch_to_20260805_v5"
+        root = ROOT / "PhantomX" / "REGISTRATION" / "batch_to_20260805_v6"
         pair_dirs = sorted(
             path for path in root.iterdir()
             if path.is_dir() and "__" in path.name
