@@ -22,6 +22,7 @@ from registration import (
     resample_image,
     resample_mask,
     rigid_register,
+    landmark_rigid_output_transform,
     translation_centroid_output_transform,
 )
 
@@ -32,7 +33,7 @@ DEFAULT_REGISTRATION_LABELS = (
     116,                  # sternum
 )
 REGISTRATION_METRIC = "correlation"
-WORKFLOW_VERSION = 5
+WORKFLOW_VERSION = 6
 
 
 for stream in (sys.stdout, sys.stderr):
@@ -145,6 +146,7 @@ def _run(args: argparse.Namespace, output: Path) -> None:
     }
     state_path = output / "pilot_state.json"
     can_resume_registration = False
+    state = None
     if args.force:
         state = None
     if state_path.exists():
@@ -282,37 +284,60 @@ def _run(args: argparse.Namespace, output: Path) -> None:
                 else:
                     print("[qc] Stabil kemik maskesi iyileşmedi; identity kullanılıyor", flush=True)
             if candidate_transform is None or not accepted:
-                fallback_transform = translation_centroid_output_transform(
-                    fixed_stable_mask, moving_stable_mask
+                landmark_transform = landmark_rigid_output_transform(
+                    fixed_seg, moving_seg, registration_labels
                 )
-                fallback_stable = resample_mask(
-                    moving_stable_mask, fixed_stable_mask, fallback_transform
+                landmark_stable = resample_mask(
+                    moving_stable_mask, fixed_stable_mask, landmark_transform
                 )
-                fallback_score = _stable_score(fixed_stable_mask, fallback_stable)
-                fallback_ok = (
-                    math.isfinite(float(fallback_score["dice"]))
-                    and float(fallback_score["dice"]) >= float(stable_before["dice"])
+                landmark_score = _stable_score(fixed_stable_mask, landmark_stable)
+                landmark_ok = (
+                    math.isfinite(float(landmark_score["dice"]))
+                    and float(landmark_score["dice"]) > float(stable_before["dice"]) + 1e-6
                 )
-                if fallback_ok:
-                    transform = fallback_transform
+                if landmark_ok:
+                    transform = landmark_transform
                     registered_ct = resample_image(
                         moving_ct, fixed_ct, transform,
                         sitk.sitkLinear, default_value=-1024.0
                     )
                     registered_seg = resample_mask(moving_seg, fixed_seg, transform)
-                    stable_after = fallback_score
+                    stable_after = landmark_score
                     accepted = True
-                    registration_method = "centroid_translation_fallback"
-                    print("[qc] Centroid translation fallback kabul edildi", flush=True)
+                    registration_method = "landmark_rigid_fallback"
+                    print("[qc] Landmark rigid fallback kabul edildi", flush=True)
                 else:
-                    transform = sitk.Transform(3, sitk.sitkIdentity)
-                    registered_ct = resample_image(
-                        moving_ct, fixed_ct, transform,
-                        sitk.sitkLinear, default_value=-1024.0
+                    fallback_transform = translation_centroid_output_transform(
+                    fixed_stable_mask, moving_stable_mask
                     )
-                    registered_seg = moving_seg_on_fixed
-                    stable_after = stable_before
-                    registration_method = "identity"
+                    fallback_stable = resample_mask(
+                        moving_stable_mask, fixed_stable_mask, fallback_transform
+                    )
+                    fallback_score = _stable_score(fixed_stable_mask, fallback_stable)
+                    fallback_ok = (
+                        math.isfinite(float(fallback_score["dice"]))
+                        and float(fallback_score["dice"]) >= float(stable_before["dice"])
+                    )
+                    if fallback_ok:
+                        transform = fallback_transform
+                        registered_ct = resample_image(
+                            moving_ct, fixed_ct, transform,
+                            sitk.sitkLinear, default_value=-1024.0
+                        )
+                        registered_seg = resample_mask(moving_seg, fixed_seg, transform)
+                        stable_after = fallback_score
+                        accepted = True
+                        registration_method = "centroid_translation_fallback"
+                        print("[qc] Centroid translation fallback kabul edildi", flush=True)
+                    else:
+                        transform = sitk.Transform(3, sitk.sitkIdentity)
+                        registered_ct = resample_image(
+                            moving_ct, fixed_ct, transform,
+                            sitk.sitkLinear, default_value=-1024.0
+                        )
+                        registered_seg = moving_seg_on_fixed
+                        stable_after = stable_before
+                        registration_method = "identity"
         registration_qc = {
             "stable_before": stable_before,
             "stable_after": stable_after,

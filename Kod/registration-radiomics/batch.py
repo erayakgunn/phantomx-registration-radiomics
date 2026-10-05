@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 
-WORKFLOW_VERSION = 5
+WORKFLOW_VERSION = 6
 
 
 for stream in (sys.stdout, sys.stderr):
