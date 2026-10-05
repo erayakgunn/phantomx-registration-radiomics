@@ -18,6 +18,8 @@ from tkinter import filedialog, messagebox, ttk
 from PIL import Image, ImageTk
 import numpy as np
 import SimpleITK as sitk
+from metrics import compare_label
+from registration import translation_centroid_output_transform
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -352,8 +354,17 @@ class RegistrationGui(tk.Tk):
         ttk.Label(window, text="Registered pair").grid(row=0, column=0, sticky="w", padx=10, pady=6)
         selector = ttk.Combobox(window, textvariable=selected, values=names, state="readonly", width=120)
         selector.grid(row=1, column=0, sticky="ew", padx=10, pady=6)
+        mode_var = tk.StringVar(value="registered")
+        ttk.Label(window, text="Transform mode").grid(row=2, column=0, sticky="w", padx=10)
+        mode_selector = ttk.Combobox(
+            window, textvariable=mode_var,
+            values=("identity", "translation", "rotation_only", "registered"),
+            state="readonly", width=30,
+        )
+        mode_selector.grid(row=2, column=0, sticky="e", padx=10, pady=6)
+
         panels = ttk.Frame(window)
-        panels.grid(row=2, column=0, sticky="nsew", padx=10)
+        panels.grid(row=3, column=0, sticky="nsew", padx=10)
         for column in range(3):
             panels.columnconfigure(column, weight=1)
         image_labels = [ttk.Label(panels) for _ in range(3)]
@@ -361,7 +372,7 @@ class RegistrationGui(tk.Tk):
             label.grid(row=0, column=column, sticky="nsew", padx=5)
         scales = []
         scale_frame = ttk.Frame(window)
-        scale_frame.grid(row=3, column=0, sticky="ew", padx=10, pady=8)
+        scale_frame.grid(row=4, column=0, sticky="ew", padx=10, pady=8)
         for column, text in enumerate(("Axial", "Coronal", "Sagittal")):
             ttk.Label(scale_frame, text=text).grid(row=0, column=column, sticky="w")
             scale = tk.Scale(scale_frame, orient="horizontal", from_=0, to=1, showvalue=True,
@@ -372,6 +383,17 @@ class RegistrationGui(tk.Tk):
 
         loaded: dict[str, object] = {}
 
+        def rotation_only(transform_path: Path) -> sitk.Transform:
+            source = sitk.ReadTransform(str(transform_path))
+            if isinstance(source, sitk.CompositeTransform):
+                source = source.GetNthTransform(0)
+            parameters = source.GetParameters()
+            transform = sitk.Euler3DTransform()
+            center_index = [(size - 1) / 2.0 for size in fixed_ct_image.GetSize()]
+            transform.SetCenter(fixed_ct_image.TransformContinuousIndexToPhysicalPoint(center_index))
+            transform.SetParameters((parameters[0], parameters[1], parameters[2], 0.0, 0.0, 0.0))
+            return transform
+
         def load_pair() -> None:
             pair = next(path for path in pair_dirs if path.name == selected.get())
             session, series = pair.name.split("__", 1)
@@ -379,12 +401,56 @@ class RegistrationGui(tk.Tk):
             moving_seg_path = dataset_root / ".." / session / "segmentation" / series / "seg.nii.gz"
             if not moving_seg_path.exists():
                 moving_seg_path = ROOT / "PhantomX" / "LABELED" / session / "segmentation" / series / "seg.nii.gz"
+            fixed_ct_image = sitk.ReadImage(str(fixed_ct_path), sitk.sitkFloat32)
+            fixed_seg_image = sitk.ReadImage(str(fixed_seg_path), sitk.sitkUInt16)
+            moving_seg_image = sitk.ReadImage(str(moving_seg_path), sitk.sitkUInt16)
             try:
-                loaded["ct"] = sitk.GetArrayFromImage(sitk.ReadImage(str(fixed_ct_path), sitk.sitkFloat32))
-                loaded["fixed"] = sitk.GetArrayFromImage(sitk.ReadImage(str(fixed_seg_path), sitk.sitkUInt16))
-                loaded["registered"] = sitk.GetArrayFromImage(
-                    sitk.ReadImage(str(pair / "seg_registered.nii.gz"), sitk.sitkUInt16)
+                loaded["ct"] = sitk.GetArrayFromImage(fixed_ct_image)
+                loaded["fixed"] = sitk.GetArrayFromImage(fixed_seg_image)
+                fixed_stable = sitk.GetImageFromArray(
+                    np.isin(sitk.GetArrayFromImage(fixed_seg_image),
+                            [int(x) for x in self.fields["registration_labels"].get().split()]).astype("uint8")
                 )
+                moving_stable = sitk.GetImageFromArray(
+                    np.isin(sitk.GetArrayFromImage(moving_seg_image),
+                            [int(x) for x in self.fields["registration_labels"].get().split()]).astype("uint8")
+                )
+                fixed_stable.CopyInformation(fixed_seg_image)
+                moving_stable.CopyInformation(moving_seg_image)
+                identity = sitk.Transform(3, sitk.sitkIdentity)
+                transforms = {
+                    "identity": identity,
+                    "translation": translation_centroid_output_transform(fixed_stable, moving_stable),
+                    "registered": sitk.ReadTransform(str(pair / "moving_to_fixed.tfm")),
+                }
+                candidate = pair / "candidate_moving_to_fixed.tfm"
+                if candidate.exists():
+                    transforms["rotation_only"] = rotation_only(candidate)
+                else:
+                    transforms["rotation_only"] = identity
+                loaded["masks"] = {
+                    name: sitk.GetArrayFromImage(
+                        sitk.Resample(moving_seg_image, fixed_seg_image, transform,
+                                      sitk.sitkNearestNeighbor, 0, sitk.sitkUInt16)
+                    ) for name, transform in transforms.items()
+                }
+                def mask_image(mask_array):
+                    image = sitk.GetImageFromArray(mask_array)
+                    image.CopyInformation(fixed_seg_image)
+                    return image
+                loaded["metrics"] = {
+                    name: {
+                        organ: compare_label(
+                            fixed_seg_image,
+                            mask_image(mask),
+                            label,
+                            sitk.GetArrayFromImage(fixed_seg_image),
+                            mask,
+                        )
+                        for organ, label in (("spleen", 1), ("aorta", 52))
+                    }
+                    for name, mask in loaded["masks"].items()
+                }
             except Exception as exc:  # noqa: BLE001
                 messagebox.showerror("3D viewer", f"Görüntü okunamadı:\n{exc}")
                 return
@@ -395,6 +461,16 @@ class RegistrationGui(tk.Tk):
             scales[0].set(shape[0] // 2)
             scales[1].set(shape[1] // 2)
             scales[2].set(shape[2] // 2)
+            lines = ["Mode | Spleen Dice | Aorta Dice | Spleen HD95 | Aorta HD95"]
+            for name in ("identity", "translation", "rotation_only", "registered"):
+                metrics = loaded["metrics"][name]
+                lines.append(
+                    f"{name:14} | {metrics['spleen']['dice']:.4f} | "
+                    f"{metrics['aorta']['dice']:.4f} | "
+                    f"{metrics['spleen']['hd95_mm']:.2f} | {metrics['aorta']['hd95_mm']:.2f}"
+                )
+            mode_selector["values"] = ("identity", "translation", "rotation_only", "registered")
+            self._write_log("\n".join(lines))
             render()
 
         def render() -> None:
@@ -402,7 +478,7 @@ class RegistrationGui(tk.Tk):
                 return
             ct = loaded["ct"]
             fixed = loaded["fixed"]
-            registered = loaded["registered"]
+            registered = loaded["masks"][mode_var.get()]
             indices = [int(scale.get()) for scale in scales]
             slices = [
                 (ct[indices[0]], fixed[indices[0]], registered[indices[0]]),
@@ -428,6 +504,7 @@ class RegistrationGui(tk.Tk):
                 label_widget.image = photo
 
         selector.bind("<<ComboboxSelected>>", lambda _event: load_pair())
+        mode_selector.bind("<<ComboboxSelected>>", lambda _event: render())
         load_pair()
 
     def _poll_events(self) -> None:
