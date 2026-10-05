@@ -361,8 +361,23 @@ class RegistrationGui(tk.Tk):
         )
         image_selector.grid(row=3, column=0, sticky="e", padx=10, pady=6)
 
+        legend = ttk.Frame(window)
+        legend.grid(row=4, column=0, sticky="ew", padx=10, pady=(2, 6))
+        legend_items = (
+            ("lime", "Fixed organ mask"),
+            ("red", "Registered moving mask"),
+            ("yellow", "Mask overlap"),
+            ("#ff4040", "Difference: moving CT brighter"),
+            ("#4080ff", "Difference: moving CT darker"),
+        )
+        for column, (color, text) in enumerate(legend_items):
+            swatch = tk.Canvas(legend, width=16, height=14, highlightthickness=0)
+            swatch.create_rectangle(1, 1, 15, 13, fill=color, outline=color)
+            swatch.grid(row=0, column=column * 2, padx=(4, 2))
+            ttk.Label(legend, text=text).grid(row=0, column=column * 2 + 1, padx=(0, 10))
+
         panels = ttk.Frame(window)
-        panels.grid(row=4, column=0, sticky="nsew", padx=10)
+        panels.grid(row=5, column=0, sticky="nsew", padx=10)
         for column in range(3):
             panels.columnconfigure(column, weight=1)
         image_labels = [ttk.Label(panels) for _ in range(3)]
@@ -370,7 +385,7 @@ class RegistrationGui(tk.Tk):
             label.grid(row=0, column=column, sticky="nsew", padx=5)
         scales = []
         scale_frame = ttk.Frame(window)
-        scale_frame.grid(row=5, column=0, sticky="ew", padx=10, pady=8)
+        scale_frame.grid(row=6, column=0, sticky="ew", padx=10, pady=8)
         for column, text in enumerate(("Axial", "Coronal", "Sagittal")):
             ttk.Label(scale_frame, text=text).grid(row=0, column=column, sticky="w")
             scale = tk.Scale(scale_frame, orient="horizontal", from_=0, to=1, showvalue=True,
@@ -379,7 +394,7 @@ class RegistrationGui(tk.Tk):
             scale_frame.columnconfigure(column, weight=1)
             scales.append(scale)
         metrics_text = tk.Text(window, height=6, wrap="none", state="disabled")
-        metrics_text.grid(row=6, column=0, sticky="ew", padx=10, pady=(0, 8))
+        metrics_text.grid(row=7, column=0, sticky="ew", padx=10, pady=(0, 8))
 
         loaded: dict[str, object] = {}
 
