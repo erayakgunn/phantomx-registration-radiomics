@@ -352,9 +352,17 @@ class RegistrationGui(tk.Tk):
             state="readonly", width=30,
         )
         mode_selector.grid(row=2, column=0, sticky="e", padx=10, pady=6)
+        image_mode_var = tk.StringVar(value="Blend")
+        ttk.Label(window, text="CT display").grid(row=3, column=0, sticky="w", padx=10)
+        image_selector = ttk.Combobox(
+            window, textvariable=image_mode_var,
+            values=("Fixed CT", "Registered moving CT", "Blend", "Difference"),
+            state="readonly", width=30,
+        )
+        image_selector.grid(row=3, column=0, sticky="e", padx=10, pady=6)
 
         panels = ttk.Frame(window)
-        panels.grid(row=3, column=0, sticky="nsew", padx=10)
+        panels.grid(row=4, column=0, sticky="nsew", padx=10)
         for column in range(3):
             panels.columnconfigure(column, weight=1)
         image_labels = [ttk.Label(panels) for _ in range(3)]
@@ -362,7 +370,7 @@ class RegistrationGui(tk.Tk):
             label.grid(row=0, column=column, sticky="nsew", padx=5)
         scales = []
         scale_frame = ttk.Frame(window)
-        scale_frame.grid(row=4, column=0, sticky="ew", padx=10, pady=8)
+        scale_frame.grid(row=5, column=0, sticky="ew", padx=10, pady=8)
         for column, text in enumerate(("Axial", "Coronal", "Sagittal")):
             ttk.Label(scale_frame, text=text).grid(row=0, column=column, sticky="w")
             scale = tk.Scale(scale_frame, orient="horizontal", from_=0, to=1, showvalue=True,
@@ -371,7 +379,7 @@ class RegistrationGui(tk.Tk):
             scale_frame.columnconfigure(column, weight=1)
             scales.append(scale)
         metrics_text = tk.Text(window, height=6, wrap="none", state="disabled")
-        metrics_text.grid(row=5, column=0, sticky="ew", padx=10, pady=(0, 8))
+        metrics_text.grid(row=6, column=0, sticky="ew", padx=10, pady=(0, 8))
 
         loaded: dict[str, object] = {}
 
@@ -398,6 +406,10 @@ class RegistrationGui(tk.Tk):
             moving_seg_image = sitk.ReadImage(str(moving_seg_path), sitk.sitkUInt16)
             try:
                 loaded["ct"] = sitk.GetArrayFromImage(fixed_ct_image)
+                registered_ct_image = sitk.ReadImage(
+                    str(pair / "ct_registered.nii.gz"), sitk.sitkFloat32
+                )
+                loaded["registered_ct"] = sitk.GetArrayFromImage(registered_ct_image)
                 loaded["fixed"] = sitk.GetArrayFromImage(fixed_seg_image)
                 fixed_stable = sitk.GetImageFromArray(
                     np.isin(sitk.GetArrayFromImage(fixed_seg_image),
@@ -476,17 +488,34 @@ class RegistrationGui(tk.Tk):
             registered = loaded["masks"][mode_var.get()]
             indices = [int(scale.get()) for scale in scales]
             slices = [
-                (ct[indices[0]], fixed[indices[0]], registered[indices[0]]),
-                (ct[:, indices[1], :], fixed[:, indices[1], :], registered[:, indices[1], :]),
-                (ct[:, :, indices[2]], fixed[:, :, indices[2]], registered[:, :, indices[2]]),
+                (ct[indices[0]], loaded["registered_ct"][indices[0]], fixed[indices[0]], registered[indices[0]]),
+                (ct[:, indices[1], :], loaded["registered_ct"][:, indices[1], :], fixed[:, indices[1], :], registered[:, indices[1], :]),
+                (ct[:, :, indices[2]], loaded["registered_ct"][:, :, indices[2]], fixed[:, :, indices[2]], registered[:, :, indices[2]]),
             ]
-            for label_widget, (image, fixed_mask, registered_mask) in zip(image_labels, slices):
-                image = np.rot90(image)
+            for label_widget, (fixed_image, registered_image, fixed_mask, registered_mask) in zip(image_labels, slices):
+                fixed_image = np.rot90(fixed_image)
+                registered_image = np.rot90(registered_image)
                 fixed_mask = np.rot90(fixed_mask)
                 registered_mask = np.rot90(registered_mask)
                 low, high = 40.0 - 200.0, 40.0 + 200.0
-                base = np.clip((image - low) / (high - low) * 255.0, 0, 255).astype(np.uint8)
-                rgb = np.repeat(base[:, :, None], 3, axis=2)
+                if image_mode_var.get() == "Fixed CT":
+                    display_image = fixed_image
+                    base = np.clip((display_image - low) / (high - low) * 255.0, 0, 255).astype(np.uint8)
+                    rgb = np.repeat(base[:, :, None], 3, axis=2)
+                elif image_mode_var.get() == "Registered moving CT":
+                    base = np.clip((registered_image - low) / (high - low) * 255.0, 0, 255).astype(np.uint8)
+                    rgb = np.repeat(base[:, :, None], 3, axis=2)
+                elif image_mode_var.get() == "Difference":
+                    delta = np.clip(registered_image - fixed_image, -200.0, 200.0)
+                    magnitude = (np.abs(delta) / 200.0 * 255.0).astype(np.uint8)
+                    rgb = np.zeros((*delta.shape, 3), dtype=np.uint8)
+                    rgb[:, :, 0] = np.where(delta > 0, magnitude, 0)
+                    rgb[:, :, 2] = np.where(delta < 0, magnitude, 0)
+                else:
+                    fixed_window = np.clip((fixed_image - low) / (high - low) * 255.0, 0, 255)
+                    moving_window = np.clip((registered_image - low) / (high - low) * 255.0, 0, 255)
+                    base = ((fixed_window + moving_window) / 2.0).astype(np.uint8)
+                    rgb = np.repeat(base[:, :, None], 3, axis=2)
                 fixed_area = (fixed_mask == 1) | (fixed_mask == 52)
                 registered_area = (registered_mask == 1) | (registered_mask == 52)
                 rgb[fixed_area] = [0, 255, 0]
@@ -500,6 +529,7 @@ class RegistrationGui(tk.Tk):
 
         selector.bind("<<ComboboxSelected>>", lambda _event: load_pair())
         mode_selector.bind("<<ComboboxSelected>>", lambda _event: render())
+        image_selector.bind("<<ComboboxSelected>>", lambda _event: render())
         load_pair()
 
     def _poll_events(self) -> None:
