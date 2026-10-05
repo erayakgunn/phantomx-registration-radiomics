@@ -395,7 +395,6 @@ PhantomX/REGISTRATION/batch_to_20260805_v6/visual_qc/
 GUI’de `Visual QC viewer` ve `3D volume viewer` bu V6 sonuçlarını gösterir.
 
 Toplam pair: `88`
-```
 
 V6 final batch sonuç özeti:
 
@@ -495,20 +494,6 @@ FDR-significant tekrar edilebilirlik testleri içinde:
 
 - 3D: 58 anlamlı test; 11 iyileşme, 47 kötüleşme yönünde
 - 2D: 211 anlamlı test; 18 iyileşme, 193 kötüleşme yönünde
-
-FDR düzeltilmiş Wilcoxon sonuçları:
-
-3D:
-
-- FDR-significant test: 58
-- İyileşme yönünde: 11
-- Kötüleşen/değişmeyen: 47
-
-2D:
-
-- FDR-significant test: 211
-- İyileşme yönünde: 18
-- Kötüleşen/değişmeyen: 193
 
 ## 10. Kritik Kontrol: Identity World-Space Baseline
 
