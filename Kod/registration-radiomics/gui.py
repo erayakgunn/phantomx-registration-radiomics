@@ -370,6 +370,8 @@ class RegistrationGui(tk.Tk):
             scale.grid(row=1, column=column, sticky="ew", padx=5)
             scale_frame.columnconfigure(column, weight=1)
             scales.append(scale)
+        metrics_text = tk.Text(window, height=6, wrap="none", state="disabled")
+        metrics_text.grid(row=5, column=0, sticky="ew", padx=10, pady=(0, 8))
 
         loaded: dict[str, object] = {}
 
@@ -460,7 +462,10 @@ class RegistrationGui(tk.Tk):
                     f"{metrics['spleen']['hd95_mm']:.2f} | {metrics['aorta']['hd95_mm']:.2f}"
                 )
             mode_selector["values"] = ("identity", "translation", "rotation_only", "registered")
-            self._write_log("\n".join(lines))
+            metrics_text.configure(state="normal")
+            metrics_text.delete("1.0", "end")
+            metrics_text.insert("end", "\n".join(lines))
+            metrics_text.configure(state="disabled")
             render()
 
         def render() -> None:
