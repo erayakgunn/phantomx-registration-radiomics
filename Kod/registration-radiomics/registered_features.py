@@ -58,13 +58,14 @@ def _extract_mode(ct: Path, seg: Path, pair: str, mode: str, method: str) -> pd.
 
 
 def _process_pair(pair_dir: Path, image_name: str, mask_name: str,
-                  state_name: str, output_prefix: str, method: str) -> dict:
+                  state_name: str, output_prefix: str, method: str,
+                  force: bool = False) -> dict:
     ct = pair_dir / image_name
     seg = pair_dir / mask_name
     if not ct.exists() or not seg.exists():
         return {"pair": pair_dir.name, "status": "skipped_missing_input"}
     state_path = pair_dir / state_name
-    if state_path.exists():
+    if state_path.exists() and not force:
         state = json.loads(state_path.read_text(encoding="utf-8"))
         if state.get("complete"):
             return {"pair": pair_dir.name, "status": "resumed"}
@@ -102,6 +103,8 @@ def main(args: argparse.Namespace) -> int:
         and (path / image_name).exists()
         and (path / mask_name).exists()
     )
+    if args.pair_filter:
+        pairs = [path for path in pairs if args.pair_filter in path.name]
     if args.limit is not None:
         pairs = pairs[:args.limit]
     args.registration_root.mkdir(parents=True, exist_ok=True)
@@ -110,7 +113,8 @@ def main(args: argparse.Namespace) -> int:
     workers = max(1, args.workers)
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {
-            pool.submit(_process_pair, pair, image_name, mask_name, state_name, output_prefix, method): pair
+            pool.submit(_process_pair, pair, image_name, mask_name, state_name,
+                        output_prefix, method, args.force): pair
             for pair in pairs
         }
         for future in as_completed(futures):
@@ -139,6 +143,8 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--limit", type=int)
     ap.add_argument("--workers", type=int, default=1)
     ap.add_argument("--input-kind", choices=("registered", "worldspace"), default="registered")
+    ap.add_argument("--pair-filter")
+    ap.add_argument("--force", action="store_true")
     return ap
 
 

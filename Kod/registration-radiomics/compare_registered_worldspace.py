@@ -25,8 +25,9 @@ def numeric_features(frame: pd.DataFrame) -> list[str]:
 def main(args: argparse.Namespace) -> None:
     args.output.mkdir(parents=True, exist_ok=True)
     for mode in ("3d", "2d"):
-        registered = pd.read_csv(args.root / f"all_features_registered_{mode}.csv")
-        worldspace = pd.read_csv(args.root / f"all_features_worldspace_{mode}.csv")
+        registered = pd.read_csv(args.registered_root / f"all_features_registered_{mode}.csv")
+        worldspace_root = args.worldspace_root or args.registered_root
+        worldspace = pd.read_csv(worldspace_root / f"all_features_worldspace_{mode}.csv")
         rows = []
         common = sorted(set(registered["registration_pair"]) & set(worldspace["registration_pair"]))
         features = sorted(set(numeric_features(registered)) & set(numeric_features(worldspace)))
@@ -67,7 +68,8 @@ def main(args: argparse.Namespace) -> None:
 
 def parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="Compare identity world-space and registered features")
-    ap.add_argument("root", type=Path)
+    ap.add_argument("registered_root", type=Path)
+    ap.add_argument("--worldspace-root", type=Path)
     ap.add_argument("--output", type=Path, required=True)
     return ap
 

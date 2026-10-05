@@ -138,6 +138,43 @@ def translation_centroid_output_transform(
     return transform
 
 
+def landmark_rigid_output_transform(
+    fixed_seg: sitk.Image,
+    moving_seg: sitk.Image,
+    labels: list[int],
+) -> sitk.AffineTransform:
+    """Estimate a rigid moving-to-fixed transform from matching label centroids."""
+    fixed_stats = sitk.LabelShapeStatisticsImageFilter()
+    moving_stats = sitk.LabelShapeStatisticsImageFilter()
+    fixed_points = []
+    moving_points = []
+    for label in labels:
+        fixed_stats.Execute(sitk.Cast(fixed_seg == label, sitk.sitkUInt8))
+        moving_stats.Execute(sitk.Cast(moving_seg == label, sitk.sitkUInt8))
+        if fixed_stats.HasLabel(1) and moving_stats.HasLabel(1):
+            fixed_points.append(fixed_stats.GetCentroid(1))
+            moving_points.append(moving_stats.GetCentroid(1))
+    if len(fixed_points) < 3:
+        return sitk.AffineTransform(3)
+    fixed_points = np.asarray(fixed_points, dtype=float)
+    moving_points = np.asarray(moving_points, dtype=float)
+    fixed_center = fixed_points.mean(axis=0)
+    moving_center = moving_points.mean(axis=0)
+    covariance = (moving_points - moving_center).T @ (fixed_points - fixed_center)
+    u, _, vt = np.linalg.svd(covariance)
+    rotation = vt.T @ u.T
+    if np.linalg.det(rotation) < 0:
+        vt[-1, :] *= -1
+        rotation = vt.T @ u.T
+    translation = fixed_center - rotation @ moving_center
+    inverse_rotation = rotation.T
+    inverse_translation = -inverse_rotation @ translation
+    transform = sitk.AffineTransform(3)
+    transform.SetMatrix(tuple(inverse_rotation.ravel()))
+    transform.SetTranslation(tuple(inverse_translation))
+    return transform
+
+
 def resample_image(
     image: sitk.Image,
     reference: sitk.Image,

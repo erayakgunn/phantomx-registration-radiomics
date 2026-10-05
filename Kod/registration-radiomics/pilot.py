@@ -104,6 +104,18 @@ def _stable_score(fixed_mask: sitk.Image, moving_mask: sitk.Image) -> dict:
     )
 
 
+def _passes_stable_qc(before: dict, after: dict) -> bool:
+    """Require overlap improvement without material surface/center regression."""
+    return (
+        math.isfinite(float(after["dice"]))
+        and float(after["dice"]) > float(before["dice"]) + 1e-6
+        and float(after["centroid_displacement_mm"])
+        <= float(before["centroid_displacement_mm"]) + 0.5
+        and float(after["hd95_mm"]) <= float(before["hd95_mm"]) + 1.0
+        and float(after["assd_mm"]) <= float(before["assd_mm"]) + 0.25
+    )
+
+
 def _run(args: argparse.Namespace, output: Path) -> None:
     print("[1/5] CT ve segmentation dosyaları okunuyor", flush=True)
     fixed_ct = read_image(Path(args.fixed_ct), sitk.sitkFloat32)
@@ -269,10 +281,7 @@ def _run(args: argparse.Namespace, output: Path) -> None:
                     moving_stable_mask, fixed_stable_mask, output_transform
                 )
                 stable_after = _stable_score(fixed_stable_mask, candidate_stable)
-                accepted = (
-                    math.isfinite(float(stable_after["dice"]))
-                    and float(stable_after["dice"]) > float(stable_before["dice"]) + 1e-6
-                )
+                accepted = _passes_stable_qc(stable_before, stable_after)
                 candidate_transform_path = output / "candidate_moving_to_fixed.tfm"
                 sitk.WriteTransform(output_transform, str(candidate_transform_path))
                 if accepted:
@@ -291,10 +300,7 @@ def _run(args: argparse.Namespace, output: Path) -> None:
                     moving_stable_mask, fixed_stable_mask, landmark_transform
                 )
                 landmark_score = _stable_score(fixed_stable_mask, landmark_stable)
-                landmark_ok = (
-                    math.isfinite(float(landmark_score["dice"]))
-                    and float(landmark_score["dice"]) > float(stable_before["dice"]) + 1e-6
-                )
+                landmark_ok = _passes_stable_qc(stable_before, landmark_score)
                 if landmark_ok:
                     transform = landmark_transform
                     registered_ct = resample_image(
@@ -314,10 +320,7 @@ def _run(args: argparse.Namespace, output: Path) -> None:
                         moving_stable_mask, fixed_stable_mask, fallback_transform
                     )
                     fallback_score = _stable_score(fixed_stable_mask, fallback_stable)
-                    fallback_ok = (
-                        math.isfinite(float(fallback_score["dice"]))
-                        and float(fallback_score["dice"]) >= float(stable_before["dice"])
-                    )
+                    fallback_ok = _passes_stable_qc(stable_before, fallback_score)
                     if fallback_ok:
                         transform = fallback_transform
                         registered_ct = resample_image(
