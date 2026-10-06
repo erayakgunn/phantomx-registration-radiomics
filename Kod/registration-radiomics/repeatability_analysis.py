@@ -19,7 +19,7 @@ META = {
 def numeric_columns(frame: pd.DataFrame) -> list[str]:
     result = []
     for column in frame.columns:
-        if column in META or column.startswith("dcm_"):
+        if column in META or column.startswith(("image_", "sample_", "dcm_")):
             continue
         if pd.to_numeric(frame[column], errors="coerce").notna().any():
             result.append(column)

@@ -20,7 +20,8 @@ def numeric_features(frame: pd.DataFrame) -> list[str]:
     excluded = META_COLUMNS | {c for c in frame.columns if c.startswith("dcm_")}
     result = []
     for column in frame.columns:
-        if column in excluded or column == "image_mask_label":
+        if (column in excluded or column == "image_mask_label"
+                or column.startswith(("image_", "sample_", "dcm_"))):
             continue
         converted = pd.to_numeric(frame[column], errors="coerce")
         if converted.notna().any():

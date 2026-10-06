@@ -15,7 +15,7 @@ META = {"registration_pair", "analysis_method", "radiomics_mode", "sample_name",
 def numeric_features(frame: pd.DataFrame) -> list[str]:
     columns = []
     for column in frame.columns:
-        if column in META or column.startswith("dcm_"):
+        if column in META or column.startswith(("image_", "sample_", "dcm_")):
             continue
         if pd.to_numeric(frame[column], errors="coerce").notna().any():
             columns.append(column)
