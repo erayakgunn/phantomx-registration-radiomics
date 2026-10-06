@@ -294,6 +294,28 @@ def main(args: argparse.Namespace):
         ])
     add_table(doc, ["Mode", "Feature-organ", "CV iyileşti", "Pairwise iyileşti", "İkisi", "FDR anlamlı", "Anlamlı iyileşti", "Anlamlı kötüleşti"], rep_rows)
 
+    ci_path = analysis / "repeatability_confidence_intervals_v6.csv"
+    if ci_path.exists():
+        ci_data = pd.read_csv(ci_path)
+        ci_rows = []
+        for mode in ("3d", "2d"):
+            for metric, metric_label in (("coefficient_of_variation", "CV"),
+                                         ("median_pairwise_relative_difference", "Pairwise relative difference")):
+                subset = ci_data[(ci_data["mode"] == mode) & (ci_data["metric"] == metric)]
+                counts = subset["direction"].value_counts()
+                ci_rows.append([
+                    mode.upper(), metric_label, len(subset),
+                    int(counts.get("improved", 0)),
+                    int(counts.get("worsened", 0)),
+                    int(counts.get("uncertain", 0)),
+                ])
+        doc.add_paragraph(
+            "Belirsizlik için oturum eşleşmeleri 5,000 tekrarlı paired bootstrap ile "
+            "örneklendi. ‘Improved’ 95% CI’nin sıfırın tamamen altında; ‘worsened’ "
+            "tamamen üstünde; ‘uncertain’ ise sıfırı içerdiği anlamına gelir."
+        )
+        add_table(doc, ["Mode", "Ölçü", "Test", "CI iyileşme", "CI kötüleşme", "Belirsiz"], ci_rows)
+
     doc.add_heading("Feature Aileleri", level=1)
     family_rows = []
     for mode in ("3d", "2d"):
@@ -346,7 +368,7 @@ def main(args: argparse.Namespace):
         "Düşük Dice kalan pair’lerde görsel QC gereklidir; Dice segmentasyon değişkenliği ve FOV’dan da etkilenir.",
         "Aorta için aynı-oturum TotalSegmentator maksimum Dice 0.9892 olduğundan 0.99 katı eşiği ölçülebilir segmentation tavanıyla uyumsuzdur.",
         "Feature aileleri ve organlar ayrı raporlanmalı; near-zero/kararsız feature’lar relative fark analizinden çıkarılmalı veya özel işaretlenmelidir.",
-        "Companion organ-coordinate yaklaşımıyla aynı pair’ler ve aynı MIRP ayarlarında karşılaştırma yapılmalıdır.",
+        "Companion organ-coordinate yönteminin kodu/çıktıları bu paket içinde bulunmadığından, aynı pair ve MIRP ayarlarında doğrudan karşılaştırma henüz yapılamadı.",
     ]:
         doc.add_paragraph(item, style="List Bullet")
 

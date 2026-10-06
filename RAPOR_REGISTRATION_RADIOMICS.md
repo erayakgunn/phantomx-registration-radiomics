@@ -495,6 +495,13 @@ FDR-significant tekrar edilebilirlik testleri içinde:
 - 3D: 58 anlamlı test; 11 iyileşme, 47 kötüleşme yönünde
 - 2D: 211 anlamlı test; 18 iyileşme, 193 kötüleşme yönünde
 
+Session eşleşmeleri üzerinden 5,000 tekrarlı paired bootstrap %95 CI sonuçlarında:
+
+- 3D CV farkı için 14 feature’da iyileşme yönündeki CI sıfırdan ayrıldı; 74 feature’da kötüleşme yönünde ayrıldı.
+- 3D pairwise relative difference için 17 iyileşme ve 69 kötüleşme yönlü CI sıfırdan ayrıldı.
+- 2D CV farkında 20 iyileşme ve 179 kötüleşme; pairwise farkında 24 iyileşme ve 157 kötüleşme yönlü CI sıfırdan ayrıldı.
+- Diğer feature’ların CI’ları sıfırı içerdi; yön konusunda belirsiz kabul edildi.
+
 ## 10. Kritik Kontrol: Identity World-Space Baseline
 
 Registration’ın etkisini interpolation etkisinden ayırmak için üçüncü analiz
