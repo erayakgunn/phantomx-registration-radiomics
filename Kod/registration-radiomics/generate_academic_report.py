@@ -65,6 +65,16 @@ def add_caption(doc: Document, text: str):
     paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
 
+def fmt_mm(value) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "NaN"
+    if not np.isfinite(number):
+        return "NaN"
+    return f"{number:.3f}"
+
+
 def family_summary(path: Path) -> pd.DataFrame:
     data = pd.read_csv(path)
     data["family"] = data["feature"].map(
@@ -216,24 +226,31 @@ def main(args: argparse.Namespace):
     )
 
     doc.add_heading("Dice Eşiği ve Yorum", level=1)
-    ceiling_path = ROOT / "PhantomX" / "REGISTRATION" / "segmentation_ceiling.csv"
-    ceiling = list(csv.DictReader(ceiling_path.open(encoding="utf-8")))
-    ceilings = {}
-    for organ in ("spleen", "aorta"):
-        values = [float(row["dice"]) for row in ceiling if row["organ"] == organ]
-        ceilings[organ] = (statistics.median(values), max(values))
-    add_table(doc, ["Organ", "Aynı oturum median Dice", "Gözlenen maksimum Dice", "V6 ortalama final Dice"], [
-        ["Spleen", f"{ceilings['spleen'][0]:.4f}", f"{ceilings['spleen'][1]:.4f}", f"{dice_after[0]:.4f}"],
-        ["Aorta", f"{ceilings['aorta'][0]:.4f}", f"{ceilings['aorta'][1]:.4f}", f"{dice_after[1]:.4f}"],
-    ])
-    doc.add_paragraph(
-        "Dice = 2|A∩B|/(|A|+|B|), yani iki binary maskenin voxel overlap ölçüsüdür. "
-        "Dice 1’e yaklaştıkça overlap artar; tek başına ground-truth segmentation "
-        "doğruluğunu veya radiomic tekrarlanabilirliği kanıtlamaz. Aynı oturumdaki "
-        "TotalSegmentator maskelerinde aorta için gözlenen maksimum Dice 0.99’un "
-        "altında olduğundan, tüm pair’lerde Dice≥0.99 şartı bu veriyle gerçekçi bir "
-        "kabul kriteri değildir."
-    )
+    registration_base = reg_root.parent
+    ceiling_path = registration_base / "segmentation_ceiling.csv"
+    if ceiling_path.exists():
+        ceiling = list(csv.DictReader(ceiling_path.open(encoding="utf-8")))
+        ceilings = {}
+        for organ in ("spleen", "aorta"):
+            values = [float(row["dice"]) for row in ceiling if row["organ"] == organ]
+            ceilings[organ] = (statistics.median(values), max(values))
+        add_table(doc, ["Organ", "Aynı oturum median Dice", "Gözlenen maksimum Dice", "V6 ortalama final Dice"], [
+            ["Spleen", f"{ceilings['spleen'][0]:.4f}", f"{ceilings['spleen'][1]:.4f}", f"{dice_after[0]:.4f}"],
+            ["Aorta", f"{ceilings['aorta'][0]:.4f}", f"{ceilings['aorta'][1]:.4f}", f"{dice_after[1]:.4f}"],
+        ])
+        doc.add_paragraph(
+            "Dice = 2|A∩B|/(|A|+|B|), yani iki binary maskenin voxel overlap ölçüsüdür. "
+            "Dice 1’e yaklaştıkça overlap artar; tek başına ground-truth segmentation "
+            "doğruluğunu veya radiomic tekrarlanabilirliği kanıtlamaz. Aynı oturumdaki "
+            "TotalSegmentator maskelerinde aorta için gözlenen maksimum Dice 0.99’un "
+            "altında olduğundan, tüm pair’lerde Dice≥0.99 şartı bu veriyle gerçekçi bir "
+            "kabul kriteri değildir."
+        )
+    else:
+        doc.add_paragraph(
+            "Bu veri seti için segmentasyon tavanı (segmentation_ceiling.csv) henüz "
+            "üretilmedi; Dice eşiği yorumu yalnız gözlenen registration sonuçlarına dayanır."
+        )
 
     doc.add_heading("Registration Sonuçları", level=1)
     add_table(doc, ["Ölçüm", "Spleen", "Aorta"], [
@@ -249,6 +266,100 @@ def main(args: argparse.Namespace):
     add_caption(doc, "Şekil 1. V6 registration öncesi ve sonrası ortalama organ Dice değerleri.")
     doc.add_picture(str(method_fig), width=Inches(6.4))
     add_caption(doc, "Şekil 2. V6’da pair başına kullanılan dönüşüm yöntemi.")
+
+    doc.add_heading("Dönüşüm Bileşenlerinin Ayrıştırılması: Identity, Translation, Rotation ve Registration", level=1)
+    doc.add_paragraph(
+        "Organ kaymasının hangi geometrik bileşenden kaynaklandığını ayırmak için, "
+        "kohortun en büyük kaymasına sahip pair’lerinden biri olan 20260304 (yaklaşık "
+        "70 mm masa ötelemesi) üzerinde izole dönüşüm deneyi yapıldı. Aynı moving CT ve "
+        "maskesi sırasıyla identity (dönüşümsüz), yalnız translasyon (centroid), yalnız "
+        "rotasyon ve geliştirilen landmark rigid (Kabsch/SVD) registration ile fixed "
+        "grid’e taşındı; her adımda Dice, centroid displacement, HD95 ve ASSD ölçüldü."
+    )
+    transform_metrics_path = registration_base / "transform_experiment_20260304" / "metrics.csv"
+    landmark_metrics_path = registration_base / "experiment_20260304_landmark" / "metrics.csv"
+    if transform_metrics_path.exists() and landmark_metrics_path.exists():
+        tdata = pd.read_csv(transform_metrics_path)
+        ldata = pd.read_csv(landmark_metrics_path)
+        order = ["identity", "translation", "rotation_only"]
+        labels_tr = {
+            "identity": "Identity",
+            "translation": "Translation-only",
+            "rotation_only": "Rotation-only",
+            "landmark": "Landmark rigid",
+        }
+        table_rows = []
+        for name in order:
+            for organ_label, organ_name in ((1, "Spleen"), (52, "Aorta")):
+                row = tdata[(tdata["transform"] == name) & (tdata["label"] == organ_label)]
+                if row.empty:
+                    continue
+                r = row.iloc[0]
+                table_rows.append([
+                    labels_tr[name], organ_name, f"{r['dice']:.4f}",
+                    fmt_mm(r["centroid_displacement_mm"]),
+                    fmt_mm(r["hd95_mm"]), fmt_mm(r["assd_mm"]),
+                ])
+        for organ_label, organ_name in ((1, "Spleen"), (52, "Aorta")):
+            row = ldata[ldata["label"] == organ_label]
+            if row.empty:
+                continue
+            r = row.iloc[0]
+            table_rows.append([
+                labels_tr["landmark"], organ_name, f"{r['after_dice']:.4f}",
+                fmt_mm(r["after_centroid_displacement_mm"]),
+                fmt_mm(r["after_hd95_mm"]), fmt_mm(r["after_assd_mm"]),
+            ])
+        add_table(
+            doc,
+            ["Dönüşüm", "Organ", "Dice", "Centroid (mm)", "HD95 (mm)", "ASSD (mm)"],
+            table_rows,
+        )
+
+        organ_names = ["Spleen", "Aorta"]
+        organ_colors = ["#2878B5", "#D48A3A"]
+        positions = np.arange(len(order) + 1)
+        bar_width = 0.38
+        fig, ax = plt.subplots(figsize=(8.2, 4.4))
+        for j, organ_label in enumerate((1, 52)):
+            values = []
+            for name in order:
+                row = tdata[(tdata["transform"] == name) & (tdata["label"] == organ_label)]
+                values.append(float(row.iloc[0]["dice"]) if not row.empty else 0.0)
+            lrow = ldata[ldata["label"] == organ_label]
+            values.append(float(lrow.iloc[0]["after_dice"]) if not lrow.empty else 0.0)
+            ax.bar(positions + (j - 0.5) * bar_width, values, bar_width,
+                   label=organ_names[j], color=organ_colors[j])
+        ax.set_xticks(positions, ["Identity", "Translation-only", "Rotation-only", "Landmark rigid"])
+        ax.set_ylim(0, 1.05)
+        ax.set_ylabel("Dice")
+        ax.set_title("20260304 pair’inde dönüşüm bileşenlerine göre organ Dice")
+        ax.legend(frameon=False)
+        ax.grid(axis="y", alpha=.2)
+        fig.tight_layout()
+        transform_fig = figure_dir / "transform_components_dice.png"
+        fig.savefig(transform_fig, dpi=180)
+        plt.close(fig)
+        doc.add_picture(str(transform_fig), width=Inches(6.4))
+        add_caption(doc, "Şekil 3. Identity, translation-only, rotation-only ve landmark rigid registration sonrası spleen/aorta Dice değerleri.")
+
+        doc.add_paragraph(
+            "Sonuçlar nedenselliği netleştirir: identity durumunda organlar tamamen "
+            "ayrık kalır (Dice 0.00). Yalnız rotasyon uygulamak, öteleme telafi "
+            "edilmediğinden kaldıraç kolu etkisiyle centroid kaymasını dalakta "
+            "69.8 mm’den 163.5 mm’ye çıkarır ve Dice’ı 0.00’da bırakır. Yalnız "
+            "translasyon ise Dice’ı dalakta 0.930, aortada 0.922 seviyesine taşır; bu, "
+            "longitudinal konum sapmasının büyük kısmının saf öteleme kaynaklı olduğunu "
+            "gösterir. Klasik yoğunluk tabanlı rigid optimizer bu büyüklükteki kaymada "
+            "ıraksayarak geçersiz sonuç (NaN) üretir. Geliştirilen landmark rigid "
+            "registration ise rezidüel rotasyonu da düzelterek dalak Dice’ını 0.964’e, "
+            "aorta Dice’ını 0.925’e yükseltir ve centroid kaymasını 0.19 mm (dalak) ve "
+            "0.41 mm (aorta) düzeyine, yani milimetre altına indirir."
+        )
+    else:
+        doc.add_paragraph(
+            "Dönüşüm bileşeni deney çıktıları bulunamadı; bu bölüm atlandı."
+        )
 
     doc.add_heading("Düşük Dice Pair’lerinin Görsel QC’si", level=1)
     metrics = []

@@ -33,7 +33,8 @@ DEFAULT_REGISTRATION_LABELS = (
     116,                  # sternum
 )
 REGISTRATION_METRIC = "correlation"
-WORKFLOW_VERSION = 6
+WORKFLOW_VERSION = 7
+VERTEBRA_LABELS = tuple(range(27, 44))
 
 
 for stream in (sys.stdout, sys.stderr):
@@ -104,16 +105,40 @@ def _stable_score(fixed_mask: sitk.Image, moving_mask: sitk.Image) -> dict:
     )
 
 
+def _within_tolerance(after_value, before_value, tolerance: float) -> bool:
+    """Accept a usable after value; skip the regression check if the baseline is undefined."""
+    if not math.isfinite(float(after_value)):
+        return False
+    if not math.isfinite(float(before_value)):
+        return True
+    return float(after_value) <= float(before_value) + tolerance
+
+
 def _passes_stable_qc(before: dict, after: dict) -> bool:
     """Require overlap improvement without material surface/center regression."""
     return (
         math.isfinite(float(after["dice"]))
         and float(after["dice"]) > float(before["dice"]) + 1e-6
-        and float(after["centroid_displacement_mm"])
-        <= float(before["centroid_displacement_mm"]) + 0.5
-        and float(after["hd95_mm"]) <= float(before["hd95_mm"]) + 1.0
-        and float(after["assd_mm"]) <= float(before["assd_mm"]) + 0.25
+        and _within_tolerance(after["centroid_displacement_mm"],
+                              before["centroid_displacement_mm"], 0.5)
+        and _within_tolerance(after["hd95_mm"], before["hd95_mm"], 1.0)
+        and _within_tolerance(after["assd_mm"], before["assd_mm"], 0.25)
     )
+
+
+def _landmark_label_sets(registration_labels: list[int]):
+    """Return robust landmark label subsets, vertebrae first.
+
+    Ribs are frequently truncated asymmetrically between sessions, which biases
+    the Kabsch centroid fit; vertebrae are more consistently visible and give a
+    stable rigid estimate. The full set is kept as a fallback.
+    """
+    sets: list[tuple[list[int], str]] = []
+    vertebrae = [label for label in registration_labels if label in VERTEBRA_LABELS]
+    if len(vertebrae) >= 3:
+        sets.append((vertebrae, "landmark_rigid_vertebrae"))
+    sets.append((list(registration_labels), "landmark_rigid_fallback"))
+    return sets
 
 
 def _run(args: argparse.Namespace, output: Path) -> None:
@@ -269,78 +294,94 @@ def _run(args: argparse.Namespace, output: Path) -> None:
                     registration_error = repr(exc)
                     candidate_transform = None
                     print(f"[qc] Registration geçersiz: {exc}; identity kullanılıyor", flush=True)
+            # Evaluate every candidate transform and keep the one that maximises
+            # stable bone-mask Dice, so a weakly-improving rigid estimate can no
+            # longer mask a much better landmark solution.
+            accepted_candidates = []
             if candidate_transform is not None:
                 print("[3/5] Transform CT ve maskeye uygulanıyor", flush=True)
                 output_transform = candidate_transform.GetInverse()
-                candidate_ct = resample_image(
-                    moving_ct, fixed_ct, output_transform,
-                    sitk.sitkLinear, default_value=-1024.0
-                )
-                candidate_seg = resample_mask(moving_seg, fixed_seg, output_transform)
                 candidate_stable = resample_mask(
                     moving_stable_mask, fixed_stable_mask, output_transform
                 )
-                stable_after = _stable_score(fixed_stable_mask, candidate_stable)
-                accepted = _passes_stable_qc(stable_before, stable_after)
+                candidate_score = _stable_score(fixed_stable_mask, candidate_stable)
                 candidate_transform_path = output / "candidate_moving_to_fixed.tfm"
                 sitk.WriteTransform(output_transform, str(candidate_transform_path))
-                if accepted:
-                    transform = output_transform
-                    registered_ct = candidate_ct
-                    registered_seg = candidate_seg
-                    registration_method = args.transform_kind
-                    print("[qc] Stabil kemik maskesi iyileşti; transform kabul edildi", flush=True)
+                if _passes_stable_qc(stable_before, candidate_score):
+                    accepted_candidates.append(
+                        (float(candidate_score["dice"]), output_transform,
+                         args.transform_kind, candidate_score)
+                    )
+                    print(
+                        f"[qc] Correlation rigid iyileştirdi "
+                        f"(dice={float(candidate_score['dice']):.3f})",
+                        flush=True,
+                    )
                 else:
-                    print("[qc] Stabil kemik maskesi iyileşmedi; identity kullanılıyor", flush=True)
-            if candidate_transform is None or not accepted:
+                    print("[qc] Correlation rigid iyileştirmedi", flush=True)
+
+            for label_set, method_name in _landmark_label_sets(registration_labels):
                 landmark_transform = landmark_rigid_output_transform(
-                    fixed_seg, moving_seg, registration_labels
+                    fixed_seg, moving_seg, label_set
                 )
                 landmark_stable = resample_mask(
                     moving_stable_mask, fixed_stable_mask, landmark_transform
                 )
                 landmark_score = _stable_score(fixed_stable_mask, landmark_stable)
-                landmark_ok = _passes_stable_qc(stable_before, landmark_score)
-                if landmark_ok:
-                    transform = landmark_transform
+                if _passes_stable_qc(stable_before, landmark_score):
+                    accepted_candidates.append(
+                        (float(landmark_score["dice"]), landmark_transform,
+                         method_name, landmark_score)
+                    )
+                    print(
+                        f"[qc] {method_name} uygun "
+                        f"(dice={float(landmark_score['dice']):.3f})",
+                        flush=True,
+                    )
+
+            if accepted_candidates:
+                best_dice, transform, registration_method, stable_after = max(
+                    accepted_candidates, key=lambda item: item[0]
+                )
+                registered_ct = resample_image(
+                    moving_ct, fixed_ct, transform,
+                    sitk.sitkLinear, default_value=-1024.0
+                )
+                registered_seg = resample_mask(moving_seg, fixed_seg, transform)
+                accepted = True
+                print(
+                    f"[qc] Seçilen transform: {registration_method} "
+                    f"(stable dice={best_dice:.3f})",
+                    flush=True,
+                )
+            else:
+                fallback_transform = translation_centroid_output_transform(
+                    fixed_stable_mask, moving_stable_mask
+                )
+                fallback_stable = resample_mask(
+                    moving_stable_mask, fixed_stable_mask, fallback_transform
+                )
+                fallback_score = _stable_score(fixed_stable_mask, fallback_stable)
+                if _passes_stable_qc(stable_before, fallback_score):
+                    transform = fallback_transform
                     registered_ct = resample_image(
                         moving_ct, fixed_ct, transform,
                         sitk.sitkLinear, default_value=-1024.0
                     )
                     registered_seg = resample_mask(moving_seg, fixed_seg, transform)
-                    stable_after = landmark_score
+                    stable_after = fallback_score
                     accepted = True
-                    registration_method = "landmark_rigid_fallback"
-                    print("[qc] Landmark rigid fallback kabul edildi", flush=True)
+                    registration_method = "centroid_translation_fallback"
+                    print("[qc] Centroid translation fallback kabul edildi", flush=True)
                 else:
-                    fallback_transform = translation_centroid_output_transform(
-                    fixed_stable_mask, moving_stable_mask
+                    transform = sitk.Transform(3, sitk.sitkIdentity)
+                    registered_ct = resample_image(
+                        moving_ct, fixed_ct, transform,
+                        sitk.sitkLinear, default_value=-1024.0
                     )
-                    fallback_stable = resample_mask(
-                        moving_stable_mask, fixed_stable_mask, fallback_transform
-                    )
-                    fallback_score = _stable_score(fixed_stable_mask, fallback_stable)
-                    fallback_ok = _passes_stable_qc(stable_before, fallback_score)
-                    if fallback_ok:
-                        transform = fallback_transform
-                        registered_ct = resample_image(
-                            moving_ct, fixed_ct, transform,
-                            sitk.sitkLinear, default_value=-1024.0
-                        )
-                        registered_seg = resample_mask(moving_seg, fixed_seg, transform)
-                        stable_after = fallback_score
-                        accepted = True
-                        registration_method = "centroid_translation_fallback"
-                        print("[qc] Centroid translation fallback kabul edildi", flush=True)
-                    else:
-                        transform = sitk.Transform(3, sitk.sitkIdentity)
-                        registered_ct = resample_image(
-                            moving_ct, fixed_ct, transform,
-                            sitk.sitkLinear, default_value=-1024.0
-                        )
-                        registered_seg = moving_seg_on_fixed
-                        stable_after = stable_before
-                        registration_method = "identity"
+                    registered_seg = moving_seg_on_fixed
+                    stable_after = stable_before
+                    registration_method = "identity"
         registration_qc = {
             "stable_before": stable_before,
             "stable_after": stable_after,

@@ -5,13 +5,16 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 
-WORKFLOW_VERSION = 6
+WORKFLOW_VERSION = 7
+TAKE1_PATTERN = re.compile(r"_take1(?![0-9])")
+SERIES_SUFFIX_PATTERN = re.compile(r"_s\d+$")
 
 
 for stream in (sys.stdout, sys.stderr):
@@ -80,8 +83,14 @@ def _main(args: argparse.Namespace) -> int:
     all_series = [(session.name, *item) for session in sessions for item in series_files(session)]
     fixed_candidates = [
         item for item in all_series
-        if item[0] == args.fixed_session and item[1].endswith("_take1")
+        if item[0] == args.fixed_session and TAKE1_PATTERN.search(item[1])
     ]
+    base_candidates = [
+        item for item in fixed_candidates
+        if not SERIES_SUFFIX_PATTERN.search(item[1])
+    ]
+    if len(base_candidates) == 1:
+        fixed_candidates = base_candidates
     if len(fixed_candidates) != 1:
         raise RuntimeError("Fixed session/take1 bulunamadı veya benzersiz değil")
     fixed_session, fixed_name, fixed_ct, fixed_seg = fixed_candidates[0]

@@ -5,12 +5,16 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
 import SimpleITK as sitk
 
 from registration import read_image, resample_image, resample_mask
+
+
+TAKE1_PATTERN = re.compile(r"_take1(?![0-9])")
 
 
 for stream in (sys.stdout, sys.stderr):
@@ -28,9 +32,10 @@ def atomic_image(image: sitk.Image, path: Path) -> None:
 
 def main(args: argparse.Namespace) -> None:
     fixed_series = next(
-        args.dataset_root.glob(
-            f"{args.fixed_session}/nifti/*_take1/ct.nii.gz"
+        path for path in sorted(
+            args.dataset_root.glob(f"{args.fixed_session}/nifti/*/ct.nii.gz")
         )
+        if TAKE1_PATTERN.search(path.parent.name)
     )
     fixed_ct = read_image(fixed_series, sitk.sitkFloat32)
     pairs = sorted(
