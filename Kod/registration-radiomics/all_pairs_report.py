@@ -17,6 +17,9 @@ from pathlib import Path
 import numpy as np
 import openpyxl
 import SimpleITK as sitk
+from openpyxl.formatting.rule import ColorScaleRule
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
 from scipy import ndimage
 from skimage.morphology import skeletonize
 
@@ -259,8 +262,133 @@ def main():
                    round(p["Spleen centroid_diff"], 3), round(p["Spleen vol_ratio"], 5),
                    "", "", low_a, low_s, category, severity, "deformable/segmentation QC" if category else ""])
 
-    for sheet in wb.worksheets:
-        sheet.freeze_panes = "A2"
+    # ---- styling (mirrors the SEP all-pairs workbook) ----
+    header_fill = PatternFill("solid", fgColor="2F5496")
+    diag_fill = PatternFill("solid", fgColor="1F4E78")
+    diff_fill = PatternFill("solid", fgColor="FCE4D6")
+    same_fill = PatternFill("solid", fgColor="E2EFDA")
+
+    def style_header(sheet, row, ncols, size=10, fill=header_fill):
+        for col in range(1, ncols + 1):
+            cell = sheet.cell(row=row, column=col)
+            cell.fill = fill
+            cell.font = Font(bold=True, color="FFFFFF", size=size)
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    def scale(sheet, rng, higher_better=True):
+        if higher_better:
+            sheet.conditional_formatting.add(rng, ColorScaleRule(
+                start_type="min", start_color="FFC7CE",
+                mid_type="percentile", mid_value=50, mid_color="FFEB9C",
+                end_type="max", end_color="C6EFCE"))
+        else:
+            sheet.conditional_formatting.add(rng, ColorScaleRule(
+                start_type="min", start_color="C6EFCE",
+                mid_type="percentile", mid_value=50, mid_color="FFEB9C",
+                end_type="max", end_color="FFC7CE"))
+
+    # Summary
+    ws = wb["Summary"]
+    ws["A1"].font = Font(bold=True, size=13)
+    ws["A2"].font = Font(size=9)
+    style_header(ws, 4, 9, size=10)
+    for row in range(5, ws.max_row + 1):
+        comp = ws.cell(row=row, column=3).value
+        fill = diff_fill if comp == "Different sessions" else same_fill
+        for col in range(1, 10):
+            cell = ws.cell(row=row, column=col)
+            cell.fill = fill
+            cell.font = Font(size=10)
+    ws.freeze_panes = "A5"
+    for col, width in {"A": 10, "B": 12, "C": 20, "D": 9, "E": 11, "F": 11, "G": 11, "H": 11, "I": 11}.items():
+        ws.column_dimensions[col].width = width
+
+    # Per-metric matrices
+    for organ_name, _ in ORGANS:
+        for metric, key in [("Dice", "after"), ("ASSD", "ASSD"), ("HD95", "HD95"), ("clDice", "clDice")]:
+            sheet = wb[f"{organ_name}_{metric}_Series"]
+            sheet["A1"].font = Font(bold=True, size=12)
+            ncols = sheet.max_column
+            style_header(sheet, 3, ncols, size=8)
+            for row in range(4, sheet.max_row + 1):
+                label = sheet.cell(row=row, column=1)
+                label.fill = header_fill
+                label.font = Font(bold=True, color="FFFFFF", size=8)
+            sheet.freeze_panes = "B4"
+            sheet.column_dimensions["A"].width = 14
+            for col in range(2, ncols + 1):
+                sheet.column_dimensions[get_column_letter(col)].width = 6.5
+            scale(sheet, f"B4:{get_column_letter(ncols)}{sheet.max_row}", metric in ("Dice", "clDice"))
+
+    # Pairs
+    ws = wb["Pairs"]
+    style_header(ws, 1, ws.max_column, size=10)
+    ws.freeze_panes = "C2"
+    for col in range(1, ws.max_column + 1):
+        ws.column_dimensions[get_column_letter(col)].width = 16
+        for row in range(2, ws.max_row + 1):
+            ws.cell(row=row, column=col).font = Font(size=9)
+    for col, higher in [("G", True), ("H", False), ("I", False), ("J", True),
+                        ("K", True), ("L", False), ("M", False)]:
+        scale(ws, f"{col}2:{col}{ws.max_row}", higher)
+
+    # Improvements
+    ws = wb["Improvements"]
+    style_header(ws, 1, ws.max_column, size=10)
+    ws.freeze_panes = "C2"
+    for col, width in {"A": 11, "B": 7, "C": 11, "D": 7, "E": 18, "F": 18, "G": 11,
+                       "H": 11, "I": 11, "J": 10, "K": 11, "L": 11, "M": 11, "N": 10, "O": 10}.items():
+        ws.column_dimensions[col].width = width
+    for row in range(2, ws.max_row + 1):
+        for col in range(1, ws.max_column + 1):
+            ws.cell(row=row, column=col).font = Font(size=9)
+    for col in "HIJKLM":
+        scale(ws, f"{col}2:{col}{ws.max_row}", True)
+
+    # Date_Summary
+    ws = wb["Date_Summary"]
+    style_header(ws, 1, ws.max_column, size=10)
+    ws.freeze_panes = "C2"
+    for col, width in {"A": 11, "B": 11, "C": 12, "D": 11, "E": 11, "F": 10,
+                       "G": 11, "H": 11, "I": 10, "J": 10, "K": 10}.items():
+        ws.column_dimensions[col].width = width
+    for row in range(2, ws.max_row + 1):
+        for col in range(1, ws.max_column + 1):
+            ws.cell(row=row, column=col).font = Font(size=9)
+    for col in "DEFGHI":
+        scale(ws, f"{col}2:{col}{ws.max_row}", True)
+
+    # Dice_Diagnostics
+    ws = wb["Dice_Diagnostics"]
+    style_header(ws, 1, ws.max_column, size=10, fill=diag_fill)
+    ws.freeze_panes = "C2"
+    ws.sheet_properties.tabColor = "F4B183"
+    for col, width in {"A": 17, "B": 17, "C": 11, "D": 11, "E": 10, "F": 10, "G": 10,
+                       "H": 13, "I": 13, "J": 13, "K": 13, "L": 10, "M": 10, "N": 10,
+                       "O": 10, "P": 10, "Q": 10, "R": 24}.items():
+        ws.column_dimensions[col].width = width
+    for row in range(2, ws.max_row + 1):
+        for col in range(1, ws.max_column + 1):
+            cell = ws.cell(row=row, column=col)
+            cell.font = Font(size=11)
+            if col in (6, 7):
+                cell.number_format = "0.0000"
+            elif col in (8, 10):
+                cell.number_format = "0.000"
+    notes_start = ws.max_row + 2
+    title_cell = ws.cell(row=notes_start, column=1, value="Dice diagnostics — notes")
+    title_cell.font = Font(bold=True, size=11)
+    ws.merge_cells(start_row=notes_start, start_column=1, end_row=notes_start, end_column=18)
+    notes = [
+        ("Same-session", "Aynı oturum çiftleri identity ile karşılaştırılır; düşük Dice segmentasyon/şekil kaynaklıdır."),
+        ("Cross-session Aorta", "Rigid centroid residual küçük; kalan fark Aorta boundary/segmentasyon farkıdır."),
+        ("Cross-session Spleen", "Düşük Spleen vakalarında centroid residual daha büyük; refinement yardımcı olabilir."),
+        ("QC", "QC işaretli seriler ayrı değerlendirilmeli; overlay yalnızca görsel kontrol içindir."),
+    ]
+    for offset, (label_text, note_text) in enumerate(notes, start=1):
+        ws.cell(row=notes_start + offset, column=1, value=label_text).font = Font(bold=True, size=11)
+        ws.cell(row=notes_start + offset, column=2, value=note_text).font = Font(size=11)
+
     wb.save(args.output)
     print(f"Wrote {args.output}", flush=True)
 
