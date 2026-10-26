@@ -1,0 +1,123 @@
+========================================================================
+ PhantomXPro Radiomics — Kullanım
+========================================================================
+
+Ne yapar
+--------
+Etiketlenmiş CalibraMics PhantomXPro veri setinden MIRP / IBSI-1 uyumlu
+radiomics öznitelikleri çıkarır ve tek bir Excel dosyası üretir.
+
+Üç tarayıcının çıktısını da aynı şekilde işler; ayar yapmanız gerekmez:
+  * Siemens NAEOTOM Alpha   (foton sayan / PCCT)
+  * Philips Spectral CT 7500 (KSW)
+  * Siemens SOMATOM Edge Plus (SEP / EID)
+
+Nasıl çalıştırılır
+------------------
+Yol 1: exe'ye ÇİFT TIKLAYIN. Klasör seçme penceresi açılır; etiketlenmiş
+  veri seti klasörünü seçin.
+
+Yol 2: Klasörü doğrudan PhantomXPro_Radiomics.exe üzerine SÜRÜKLEYIP
+  BIRAKIN.
+
+Sonrası ikisinde de aynı:
+  1. Kaç seri bulduğunu gösterir, süre tahmini verir ve onay ister.
+     Enter = başla, q + Enter = iptal.
+  2. Çalışırken her biten seriyi ve kalan süreyi yazar.
+  3. Bitince tek bir soru sorar: Enter'a basarsanız sonuç Excel dosyasını
+     açar, q + Enter derseniz sadece kapatır.
+
+Yani sizden istenen tek şey klasörü göstermek.
+
+Hangi klasörü vermeliyim
+------------------------
+Serileri İÇEREN klasörü verin, tek bir seriyi değil. Her seri şöyle
+görünmeli:
+
+  <seri adı>/
+    dicoms/                        *.dcm veya *.IMA   (ham CT kesitleri)
+    Inserts/5mm/Insert_01/*.dcm    (ve 10mm)
+    Stars/Star16/*.dcm             (varsa)
+    Textures/Diagonal/*.dcm        (varsa)
+
+Serilerin klasör içinde 1-2 kademe derinde olması sorun değil, bulur.
+Yanlış klasörü verirseniz ne beklediğini ekrana yazar.
+
+Not: 15mm insert klasörleri KASITLI olarak işlenmez (5 ve 10 mm aynı
+silindiri örneklediği için 15 mm bilgi eklemiyor).
+
+Çıktı nereye gider
+------------------
+Verdiğiniz klasörün içine:
+
+  radiomics_output/
+    radiomics_combined.xlsx     <-- SONUÇ. Bu dosyayı kullanın.
+    _per_series/*.xlsx          ara kayıtlar (aşağıya bakın)
+    _nifti_cache/               ara görüntüler
+
+Excel dosyasında 5 sayfa var. İlki "methods" — yayında beyan edilmesi
+gereken tüm parametreler orada, canlı koddan üretiliyor, yani sayılarla
+asla çelişmez. Öznitelikler "3D_base" ve "2D_base" sayfalarında.
+
+Ne kadar sürer
+--------------
+Seri başına yaklaşık 2 dakikalık iş var ve makine kaç seriyi aynı anda
+işleyebiliyorsa o kadar bölünür. Başlarken size bir tahmin yazar.
+
+Kaba fikir: 4 çekirdek / 8 GB bir dizüstünde 80 seri ~1,5 saat;
+16+ çekirdekli bir masaüstünde ~25 dakika.
+
+Disk: seri başına ~2,5 MB (80 seri ≈ 200 MB).
+
+YARIDA KESİLİRSE
+----------------
+Sorun değil. AYNI komutu / aynı sürükle-bırakı tekrarlayın: bitmiş
+seriler `_per_series` içindeki kayıtlardan okunur, sadece kalanlar
+işlenir. Bilgisayarı kapatabilir, ertesi gün devam edebilirsiniz.
+
+Bitince ekranda ne yazar
+------------------------
+Temiz bir çalıştırma sessizdir. Bir şey kaybedildiyse bunu SÖYLER ve
+çıkış kodu 0 yerine 2 döner:
+
+  REJECTED FOLDERS   seri gibi görünüp işlenmeyen klasörler
+  METADATA WARNING   klasör adı DICOM etiketiyle çelişiyor
+                     (değer HER ZAMAN etiketten alınır, addan değil)
+  FAILED SERIES      hiç satır üretmeyen seriler
+  SKIPPED ROIs       diskte olup öznitelik üretmeyen ROI'ler
+
+Bu bloklardan biri çıkarsa lütfen ekran görüntüsünü bana gönderin —
+sessizce eksik bir sonuç üretmemesi için özellikle böyle yazıldı.
+
+İlk çalıştırmada Windows uyarısı
+--------------------------------
+exe imzalı olmadığı için "Windows protected your PC" çıkabilir:
+  More info -> Run anyway
+Antivirüs de karantinaya alabilir; kurumsal makinelerde BT'den istisna
+istemek gerekebilir.
+
+Gereksinimler
+-------------
+* Windows 64-bit
+* Veri seti klasörüne YAZMA izni (çıktı oraya yazılıyor)
+* Kurulum gerekmez, Python gerekmez. Klasörün tamamını kopyalayın;
+  exe yanındaki dosyalara ihtiyaç duyar, tek başına taşınmaz.
+
+İşe yarar seçenekler (komut satırından)
+---------------------------------------
+  PhantomXPro_Radiomics.exe "D:\veri" --dry-run
+      Hiçbir şey hesaplamaz, saniyeler sürer: kaç seri ve seri başına kaç
+      ROI bulduğunu yazar. Yeni bir klasörle ilk kez çalışırken önce bunu
+      denemek iyi bir alışkanlık — yanlış klasörü 1 saat işlemektense.
+
+  PhantomXPro_Radiomics.exe "D:\veri" --jobs 2
+      Aynı anda daha az seri işler. Makine boğulursa kullanın.
+
+  PhantomXPro_Radiomics.exe "D:\veri" --max-series 1
+      Tek seriyle deneme (~2 dakika).
+
+  PhantomXPro_Radiomics.exe "D:\veri" --yes
+      Onay istemez (otomatik çalıştırma için).
+
+  PhantomXPro_Radiomics.exe --help
+      Tüm seçenekler.

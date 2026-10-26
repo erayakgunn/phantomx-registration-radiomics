@@ -1,0 +1,19 @@
+# PhantomXPro — TotalSegmentator ortamı (AYRI Python ortamı, PyTorch/CUDA ile)
+#
+# TotalSegmentator, torch bağımlılığı nedeniyle ana pipeline'dan ayrı bir ortamda
+# kurulur. Kurulum sırası:
+#
+#  1) torch'u GPU/CUDA sürümünüze göre kurun (önce bu!):
+#        https://pytorch.org/get-started/locally/
+#     Örn. CUDA 12.8 için:
+#        <python.exe> -m pip install torch --index-url https://download.pytorch.org/whl/cu128
+#     (GPU yoksa CPU sürümü de olur; pipeline TS_DEVICE="cpu" ile çalışır.)
+#
+#  2) Sonra TotalSegmentator:
+#        <python.exe> -m pip install -r requirements-totalsegmentator.txt
+#
+#  3) Pipeline'a bu ortamı tanıtın (config.py otomatik PATH'te arar; değilse):
+#        setx PHANTOMX_TOTALSEG_EXE "...\Scripts\TotalSegmentator.exe"
+#        setx PHANTOMX_PY311        "...\python.exe"
+
+TotalSegmentator==2.12.0

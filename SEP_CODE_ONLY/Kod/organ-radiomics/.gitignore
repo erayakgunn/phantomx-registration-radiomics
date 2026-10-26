@@ -1,0 +1,15 @@
+# Çalıştırınca otomatik oluşan çıktılar — paylaşmaya gerek yok
+data/
+
+# Python önbelleği
+__pycache__/
+*.pyc
+
+# Sanal ortamlar (herkes kendi makinesinde kurar)
+env-main/
+env-ts/
+.venv/
+venv/
+
+# Claude Code yerel ayarları (kişiye/makineye özel)
+.claude/

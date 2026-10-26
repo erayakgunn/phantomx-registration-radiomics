@@ -1,0 +1,29 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# pytest
+.pytest_cache/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Logs
+*.log
+
+# Pipeline outputs (opsiyonel — büyük veri, kullanıcı karar vermeli)
+# pipeline_output/
+
+# OS artifacts
+nul
+.DS_Store
+Thumbs.db
+
+# Virtual environments
+venv/
+env/
+.venv/

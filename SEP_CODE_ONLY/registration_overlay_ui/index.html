@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SEP Phantom · Registration Overlay Gallery</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2307131f'/%3E%3Ccircle cx='12' cy='16' r='7' fill='none' stroke='%2335e0a1' stroke-width='2'/%3E%3Ccircle cx='20' cy='16' r='7' fill='none' stroke='%23ff5858' stroke-width='2'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">SEP</div>
+        <div>
+          <p class="eyebrow">PhantomX · registration review</p>
+          <h1>Overlay Gallery</h1>
+          <p class="subtitle">Aynı fixed referans üzerinde önce / sonra çakıştırmaları</p>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <div class="ref-chip">
+          <span class="mini-label">Fixed referans</span>
+          <strong id="fixedRef">20260805_t1</strong>
+        </div>
+        <button class="ghost-button" id="printButton" type="button">Yazdır</button>
+      </div>
+    </header>
+
+    <section class="stats" aria-label="Özet">
+      <article class="stat-card stat-accent">
+        <span class="stat-label">En yüksek kazanç</span>
+        <strong id="statGain">+0.149</strong>
+        <span class="stat-caption" id="statGainCaption">Spleen · 20260730_t1</span>
+      </article>
+      <article class="stat-card">
+        <span class="stat-label">En düşük final</span>
+        <strong id="statLow">0.913</strong>
+        <span class="stat-caption" id="statLowCaption">Aorta · 20260731_t10</span>
+      </article>
+      <article class="stat-card">
+        <span class="stat-label">Take sayısı</span>
+        <strong id="statCount">67</strong>
+        <span class="stat-caption">Tüm take’ler · tek fixed referans</span>
+      </article>
+      <article class="stat-card stat-quiet">
+        <span class="stat-label">Önce baseline</span>
+        <strong>Centroid</strong>
+        <span class="stat-caption">Sonra: rigid (bone / landmark)</span>
+      </article>
+    </section>
+
+    <section class="gallery-view" id="galleryView">
+      <div class="gallery-head">
+        <div>
+          <p class="eyebrow">Tüm take’ler</p>
+          <h2><span id="galleryTotal">67</span> take · 2 organ · 4 görüntü / kart</h2>
+          <p class="gallery-sub">Her take için Aorta ve Spleen’in önce/sonra konturları. Kartlar aynı fixed referansa göre sıralanır.</p>
+        </div>
+        <div class="gallery-controls">
+          <label class="search-box">
+            <span aria-hidden="true">⌕</span>
+            <input id="gallerySearch" type="search" placeholder="Take / tarih ara" autocomplete="off">
+          </label>
+          <select id="gallerySort" aria-label="Sıralama">
+            <option value="date">Tarih sırası</option>
+            <option value="gain">Ortalama kazanç ↓</option>
+            <option value="aortaFinal">Aorta final ↓</option>
+            <option value="spleenFinal">Spleen final ↓</option>
+            <option value="low">En düşük final ↑</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="gallery-meta">
+        <span id="galleryCount">67 take</span>
+        <span id="galleryFilterNote">Tümü gösteriliyor</span>
+      </div>
+
+      <div class="gallery-grid" id="galleryGrid"></div>
+      <div class="gallery-empty" id="galleryEmpty" hidden></div>
+    </section>
+
+    <div id="detailView" hidden>
+      <div class="detail-nav">
+        <button class="ghost-button" id="backToGallery" type="button">← Tüm take’ler</button>
+        <span id="detailCurrent"></span>
+      </div>
+
+      <nav class="case-tabs" id="caseTabs" aria-label="Vaka seçimi"></nav>
+
+      <main class="layout">
+      <aside class="panel sidebar">
+        <div class="panel-section">
+          <p class="eyebrow">Seçili vaka</p>
+          <h2 id="caseTitle"></h2>
+          <p class="series-line" id="caseSeries"></p>
+          <div class="pill-row" id="caseTags"></div>
+          <p class="case-note" id="caseNote"></p>
+        </div>
+
+        <div class="panel-section">
+          <div class="control-head">
+            <span class="mini-label">Organ</span>
+            <span class="control-hint">Aorta / Spleen</span>
+          </div>
+          <div class="segmented" id="organTabs" role="tablist" aria-label="Organ"></div>
+        </div>
+
+        <div class="panel-section">
+          <div class="control-head">
+            <span class="mini-label">Plan</span>
+            <span class="control-hint" id="planeHint">3 aksiyel kesit</span>
+          </div>
+          <div class="segmented" id="planeTabs" role="tablist" aria-label="Plan"></div>
+          <div class="slice-mode-row" id="sliceModeRow">
+            <span class="mini-label">Kesit görünümü</span>
+            <div class="mini-toggle" id="sliceModeToggle" role="group" aria-label="Kesit görünümü">
+              <button type="button" data-slice-mode="samples" class="active">3 örnek</button>
+              <button type="button" data-slice-mode="all">Tümü</button>
+            </div>
+          </div>
+          <div class="slice-list" id="sliceTabs" aria-label="Örnek kesitler"></div>
+          <div class="all-slice" id="allSliceControl" hidden>
+            <div class="all-slice-head">
+              <strong id="allSliceLabel">z 82</strong>
+              <span id="allSliceCount">112 kesit</span>
+            </div>
+            <input id="allSliceRange" type="range" min="0" max="0" value="0" step="1" aria-label="Tüm kesitler">
+            <div class="all-slice-axis">
+              <span id="allSliceMin">z 27</span>
+              <span id="allSliceMax">z 138</span>
+            </div>
+            <p class="all-slice-hint">Fixed z aralığındaki her kesit; slider ile tüm görüntüler.</p>
+          </div>
+        </div>
+
+        <div class="panel-section legend-box">
+          <span class="mini-label">Lejant</span>
+          <div class="legend-row"><span class="legend-dot fixed"></span><span>Fixed kontur</span></div>
+          <div class="legend-row"><span class="legend-dot moving"></span><span>Moving kontur</span></div>
+          <div class="legend-row"><span class="legend-swatch overlap"></span><span>Çakışma / örtüşme</span></div>
+        </div>
+      </aside>
+
+      <section class="panel viewer-panel">
+        <div class="viewer-head">
+          <div>
+            <p class="eyebrow" id="viewEyebrow">Önce / sonra</p>
+            <h3 id="viewLabel">Aorta · aksiyel · z 82</h3>
+          </div>
+          <div class="mode-toggle" id="modeToggle" role="group" aria-label="Görünüm modu">
+            <button type="button" data-mode="slider" class="active">Slider</button>
+            <button type="button" data-mode="side">Yan yana</button>
+          </div>
+        </div>
+
+        <div class="compare slider" id="compare">
+          <div class="pane before-pane">
+            <img id="imgBefore" alt="Önce: centroid öteleme sonrası çakıştırma" draggable="false">
+            <span class="image-tag tag-before">ÖNCE · centroid</span>
+          </div>
+          <div class="pane after-pane" id="afterPane">
+            <img id="imgAfter" alt="Sonra: rigid registration sonrası çakıştırma" draggable="false">
+            <span class="image-tag tag-after">SONRA · rigid</span>
+          </div>
+          <div class="compare-divider" id="compareDivider" aria-hidden="true">
+            <span></span>
+          </div>
+        </div>
+
+        <div class="slider-row" id="sliderRow">
+          <span>Önce</span>
+          <input id="splitRange" type="range" min="0" max="100" value="50" step="1" aria-label="Önce sonra karşılaştırma">
+          <span>Sonra</span>
+        </div>
+
+        <div class="viewer-foot">
+          <span id="viewMeta">20260805_t1 fixed · 20260731_t10 moving</span>
+          <span class="method-line"><span class="dot before-dot"></span>Centroid <span class="arrow">→</span><span class="dot after-dot"></span>Rigid</span>
+        </div>
+      </section>
+
+      <aside class="panel metrics-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Quantitative</p>
+            <h2>Dice</h2>
+          </div>
+          <span class="metric-scale-label">0.75 → 1.00</span>
+        </div>
+
+        <div id="metricRows" class="metric-rows"></div>
+
+        <div class="method-card">
+          <p class="mini-label">Yöntem</p>
+          <p id="methodText">Centroid translation → Rigid (bone / landmark)</p>
+        </div>
+
+        <div class="insight-card" id="insightCard">
+          <p class="mini-label">Ne görüyoruz?</p>
+          <p id="insightText"></p>
+        </div>
+
+        <div class="insight-card limit-card" id="limitCard">
+          <p class="mini-label">Neden daha yüksek değil?</p>
+          <p id="limitText"></p>
+          <p class="scope-note"><strong>Rigid sonrası sınır ve sonraki adım.</strong> Bu çalışmada fixed 20260805_t1’e 67 moving take için centroid-öteleme ön hizalaması ve rigid (bone/landmark) registration uygulandı; Dice, centroid farkı, HD95 ve ASSD hesaplandı. Rigid sonrası global hizalama çoğu vakada 1 mm altında kaldı; kalan Dice farkı ağırlıklı olarak boundary/şekil ve segmentasyon kaynaklı. Bu nedenle rigid ile bu noktadan sonra anlamlı ek kazanç beklenmiyor. Daha yüksek doğruluk için iki yol öne çıkar: deformable registration veya segmentasyon düzeltmesi/re-segmentation. Deformable farklı bir yöntemdir; Dice’ı yükseltse bile rigid başarısıyla doğrudan karşılaştırılamaz, küçük Aorta’da konturu fixed’e yapay olarak oturtabilir ve anatomik doğruluk landmark/QA ile ayrıca doğrulanmalıdır. Re-segmentation ise ground truth’u değiştirir; yalnızca zor vakaları düzeltmek seçim bias’ı yaratır, tüm fixed/moving veriye aynı protokolle uygulanmalı ve observer variability/ek maliyet getirir. 0805 low-label artifact ve 0731 recon grid anomalisi bu nedenle ayrı QC/validasyon konusudur.</p>
+          <p class="metric-help">Dice 1.00 = tam örtüşme; 0.90+ yüksek örtüşmedir. HD95/ASSD = kontur yüzeyleri arasındaki mesafe (mm); küçük olması iyi.</p>
+        </div>
+
+        <div class="caveat-card" id="caveatCard">
+          <p class="mini-label">Not</p>
+          <p id="caveatText"></p>
+        </div>
+      </aside>
+      </main>
+    </div>
+
+    <footer class="footer">
+      <span>SEP Phantom · Aorta label 52 · Spleen label 1 · Fixed 20260805_t1</span>
+      <span>Önce görüntüsü centroid-öteleme baseline’ıdır; sonra üretim rigid transformu.</span>
+    </footer>
+  </div>
+
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
