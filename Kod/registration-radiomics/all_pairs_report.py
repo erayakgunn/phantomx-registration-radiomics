@@ -1,7 +1,7 @@
 """Generate an all-pairs pairwise registration report (Excel) from registered segmentations.
 
-Methodology mirrors the SEP all_pairs_report:
-- same-session pairs      -> identity masks (already aligned)
+Methodology:
+- same-session pairs      -> identity comparison on a session-local reference grid
 - different-session pairs -> fixed-reference registered masks
 
 Metrics: Dice, ASSD (mm), HD95 (mm), clDice.
@@ -60,7 +60,17 @@ def pair_metrics(mask_a, mask_b, prep_a, prep_b):
     return assd, hd95, cld
 
 
-def build_series(labeled, batch, session_suffix, fixed_day, fixed_series):
+def crop_bbox(array, label, margin):
+    idx = np.where(array == label)
+    if len(idx[0]) == 0:
+        return None
+    z0, z1 = max(0, int(idx[0].min()) - margin), int(idx[0].max()) + margin + 1
+    y0, y1 = max(0, int(idx[1].min()) - margin), int(idx[1].max()) + margin + 1
+    x0, x1 = max(0, int(idx[2].min()) - margin), int(idx[2].max()) + margin + 1
+    return (z0, z1, y0, y1, x0, x1)
+
+
+def build_series(labeled, batch, session_suffix, fixed_day, fixed_series, exclude):
     by_day = defaultdict(list)
     for path in batch.iterdir():
         match = re.match(r"^(?P<day>\d{8})_(?P<session>.+?)__(?P<series>.+)$", path.name)
@@ -68,6 +78,8 @@ def build_series(labeled, batch, session_suffix, fixed_day, fixed_series):
             continue
         day = match.group("day")
         series = match.group("series")
+        if series in exclude:
+            continue
         sort_match = re.search(r"_s(\d+)$", series) or re.search(r"_take(\d+)$", series)
         sort_key = int(sort_match.group(1)) if sort_match else 0
         by_day[day].append((sort_key, path, series))
@@ -92,50 +104,71 @@ def main():
     ap.add_argument("--fixed-day", required=True)
     ap.add_argument("--fixed-series", required=True)
     ap.add_argument("--output", required=True)
+    ap.add_argument("--exclude-series", nargs="*", default=[])
     args = ap.parse_args()
 
     labeled, batch = Path(args.labeled), Path(args.batch)
-    day_dir = labeled / f"{args.fixed_day}_{args.session_suffix}"
-    fixed_seg = sitk.ReadImage(str(day_dir / "segmentation" / args.fixed_series / "seg.nii.gz"))
+    fixed_day_dir = labeled / f"{args.fixed_day}_{args.session_suffix}"
+    fixed_seg = sitk.ReadImage(str(fixed_day_dir / "segmentation" / args.fixed_series / "seg.nii.gz"))
     fixed_array = sitk.GetArrayFromImage(fixed_seg)
     spacing = np.array(fixed_seg.GetSpacing(), dtype=float)
 
-    series = build_series(labeled, batch, args.session_suffix, args.fixed_day, args.fixed_series)
+    series = build_series(labeled, batch, args.session_suffix, args.fixed_day, args.fixed_series,
+                          set(args.exclude_series))
     n = len(series)
     print(f"series={n} pairs={n*(n-1)//2}", flush=True)
+    by_day = defaultdict(list)
+    for i, item in enumerate(series):
+        by_day[item["day"]].append(i)
+
+    def native_path(item):
+        return labeled / f"{item['day']}_{args.session_suffix}" / "segmentation" / item["series"] / "seg.nii.gz"
 
     data = {}
     for organ_name, label in ORGANS:
-        idx = np.where(fixed_array == label)
-        z0, z1 = max(0, int(idx[0].min()) - MARGIN), int(idx[0].max()) + MARGIN + 1
-        y0, y1 = max(0, int(idx[1].min()) - MARGIN), int(idx[1].max()) + MARGIN + 1
-        x0, x1 = max(0, int(idx[2].min()) - MARGIN), int(idx[2].max()) + MARGIN + 1
-        print(f"[{organ_name}] crop {z1-z0}x{y1-y0}x{x1-x0}", flush=True)
+        fixed_bbox = crop_bbox(fixed_array, label, MARGIN)
+        print(f"[{organ_name}] fixed crop {fixed_bbox}", flush=True)
         store = {}
-        for i, item in enumerate(series):
-            if item["is_fixed"]:
-                native, after = fixed_seg, fixed_array
-            else:
-                native = sitk.ReadImage(str(labeled / f"{item['day']}_{args.session_suffix}" / "segmentation" / item["series"] / "seg.nii.gz"))
-                after = sitk.GetArrayFromImage(sitk.ReadImage(str(item["batch"] / "seg_registered.nii.gz")))
-            identity = sitk.GetArrayFromImage(sitk.Resample(
-                native, fixed_seg, sitk.Transform(3, sitk.sitkIdentity),
-                sitk.sitkNearestNeighbor, 0, sitk.sitkUInt16,
-            ))
-            before_mask = identity[z0:z1, y0:y1, x0:x1] == label
-            after_mask = after[z0:z1, y0:y1, x0:x1] == label
-            store[i] = {"before": before_mask, "after": after_mask, "after_prep": prepare(after_mask, spacing)}
-            if (i + 1) % 20 == 0:
-                print(f"  [{organ_name}] {i+1}/{n}", flush=True)
+        for day, idxs in sorted(by_day.items()):
+            ref_idx = next((i for i in idxs if series[i]["is_fixed"]), idxs[0])
+            ref_item = series[ref_idx]
+            ref_seg = fixed_seg if ref_item["is_fixed"] else sitk.ReadImage(str(native_path(ref_item)))
+            ref_array = sitk.GetArrayFromImage(ref_seg)
+            local_bbox = crop_bbox(ref_array, label, MARGIN) or fixed_bbox
+            lz0, lz1, ly0, ly1, lx0, lx1 = local_bbox
+            fz0, fz1, fy0, fy1, fx0, fx1 = fixed_bbox
+            for i in idxs:
+                item = series[i]
+                if item["is_fixed"]:
+                    native = fixed_seg
+                    after = fixed_array
+                else:
+                    native = sitk.ReadImage(str(native_path(item)))
+                    after = sitk.GetArrayFromImage(sitk.ReadImage(str(item["batch"] / "seg_registered.nii.gz")))
+                identity_fixed = sitk.GetArrayFromImage(sitk.Resample(
+                    native, fixed_seg, sitk.Transform(3, sitk.sitkIdentity),
+                    sitk.sitkNearestNeighbor, 0, sitk.sitkUInt16,
+                ))
+                local = sitk.GetArrayFromImage(sitk.Resample(
+                    native, ref_seg, sitk.Transform(3, sitk.sitkIdentity),
+                    sitk.sitkNearestNeighbor, 0, sitk.sitkUInt16,
+                ))
+                before_mask = identity_fixed[fz0:fz1, fy0:fy1, fx0:fx1] == label
+                local_mask = local[lz0:lz1, ly0:ly1, lx0:lx1] == label
+                after_mask = after[fz0:fz1, fy0:fy1, fx0:fx1] == label
+                store[i] = {"before": before_mask, "local": local_mask, "after": after_mask,
+                            "after_prep": prepare(after_mask, spacing)}
+            if (len(store)) % 20 == 0:
+                print(f"  [{organ_name}] {len(store)}/{n}", flush=True)
         data[organ_name] = store
 
-    before_cache = {}
+    local_cache = {}
 
-    def before_prep(organ_name, i):
+    def local_prep(organ_name, i):
         key = (organ_name, i)
-        if key not in before_cache:
-            before_cache[key] = prepare(data[organ_name][i]["before"], spacing)
-        return before_cache[key]
+        if key not in local_cache:
+            local_cache[key] = prepare(data[organ_name][i]["local"], spacing)
+        return local_cache[key]
 
     pairs = []
     for i in range(n):
@@ -148,13 +181,14 @@ def main():
             for organ_name, _ in ORGANS:
                 a, b = data[organ_name][i], data[organ_name][j]
                 if same:
-                    ma, mb = a["before"], b["before"]
-                    pa, pb = before_prep(organ_name, i), before_prep(organ_name, j)
+                    ma, mb = a["local"], b["local"]
+                    pa, pb = local_prep(organ_name, i), local_prep(organ_name, j)
+                    before = after = dice(ma, mb)
                 else:
                     ma, mb = a["after"], b["after"]
                     pa, pb = a["after_prep"], b["after_prep"]
-                before = dice(a["before"], b["before"])
-                after = dice(a["after"], b["after"])
+                    before = dice(a["before"], b["before"])
+                    after = dice(a["after"], b["after"])
                 assd, hd95, cld = pair_metrics(ma, mb, pa, pb)
                 vol_ratio = float(pa["vol"] / pb["vol"]) if pb["vol"] else float("nan")
                 com_a = np.array(ndimage.center_of_mass(ma), dtype=float) if ma.any() else np.full(3, np.nan)
@@ -177,9 +211,9 @@ def main():
     ws = wb.active
     ws.title = "Summary"
     ws.append([f"PhantomX - {args.session_suffix} - all series vs all series"])
-    ws.append([f"{n} series, {len({s['day'] for s in series})} sessions, {len(pairs)} pairs. "
-               "Same-session pairs use identity; different-session pairs use fixed-reference registration. "
-               "ASSD/HD95/clDice are post-alignment values."])
+    ws.append([f"{n} series, {len(by_day)} sessions, {len(pairs)} pairs. "
+               "Same-session pairs use identity on a session-local grid; different-session pairs use "
+               "fixed-reference registration. ASSD/HD95/clDice are post-alignment values."])
     ws.append([])
     ws.append(["Organ", "Metric", "Comparison", "N pairs", "Mean", "Std", "Median", "Min", "Max"])
     for organ_name, _ in ORGANS:
@@ -228,7 +262,7 @@ def main():
         ws.append([sa["day"], f"t{sa['take']}", sb["day"], f"t{sb['take']}", p["Series A"], p["Series B"],
                    p["Same session"], round(p["Aorta before"], 5), round(p["Aorta after"], 5), round(p["Aorta gain"], 5),
                    round(p["Spleen before"], 5), round(p["Spleen after"], 5), round(p["Spleen gain"], 5),
-                   "yes" if p["Aorta gain"] > 0 else "no", "yes" if p["Spleen gain"] > 0 else "no"])
+                   "yes" if p["Aorta gain"] >= 0 else "no", "yes" if p["Spleen gain"] >= 0 else "no"])
 
     grouped = defaultdict(list)
     for p in pairs:
@@ -244,8 +278,8 @@ def main():
                    round(float(np.mean([x["Spleen before"] for x in items])), 5),
                    round(float(np.mean([x["Spleen after"] for x in items])), 5),
                    round(float(np.mean([x["Spleen gain"] for x in items])), 5),
-                   sum(1 for x in items if x["Aorta gain"] > 0),
-                   sum(1 for x in items if x["Spleen gain"] > 0)])
+                   sum(1 for x in items if x["Aorta gain"] >= 0),
+                   sum(1 for x in items if x["Spleen gain"] >= 0)])
 
     ws = wb.create_sheet("Dice_Diagnostics")
     ws.append(["Series A", "Series B", "Date A", "Date B", "Same session", "Aorta Dice", "Spleen Dice",
@@ -287,7 +321,6 @@ def main():
                 mid_type="percentile", mid_value=50, mid_color="FFEB9C",
                 end_type="max", end_color="FFC7CE"))
 
-    # Summary
     ws = wb["Summary"]
     ws["A1"].font = Font(bold=True, size=13)
     ws["A2"].font = Font(size=9)
@@ -303,7 +336,6 @@ def main():
     for col, width in {"A": 10, "B": 12, "C": 20, "D": 9, "E": 11, "F": 11, "G": 11, "H": 11, "I": 11}.items():
         ws.column_dimensions[col].width = width
 
-    # Per-metric matrices
     for organ_name, _ in ORGANS:
         for metric, key in [("Dice", "after"), ("ASSD", "ASSD"), ("HD95", "HD95"), ("clDice", "clDice")]:
             sheet = wb[f"{organ_name}_{metric}_Series"]
@@ -320,7 +352,6 @@ def main():
                 sheet.column_dimensions[get_column_letter(col)].width = 6.5
             scale(sheet, f"B4:{get_column_letter(ncols)}{sheet.max_row}", metric in ("Dice", "clDice"))
 
-    # Pairs
     ws = wb["Pairs"]
     style_header(ws, 1, ws.max_column, size=10)
     ws.freeze_panes = "C2"
@@ -332,7 +363,6 @@ def main():
                         ("K", True), ("L", False), ("M", False)]:
         scale(ws, f"{col}2:{col}{ws.max_row}", higher)
 
-    # Improvements
     ws = wb["Improvements"]
     style_header(ws, 1, ws.max_column, size=10)
     ws.freeze_panes = "C2"
@@ -345,7 +375,6 @@ def main():
     for col in "HIJKLM":
         scale(ws, f"{col}2:{col}{ws.max_row}", True)
 
-    # Date_Summary
     ws = wb["Date_Summary"]
     style_header(ws, 1, ws.max_column, size=10)
     ws.freeze_panes = "C2"
@@ -358,7 +387,6 @@ def main():
     for col in "DEFGHI":
         scale(ws, f"{col}2:{col}{ws.max_row}", True)
 
-    # Dice_Diagnostics
     ws = wb["Dice_Diagnostics"]
     style_header(ws, 1, ws.max_column, size=10, fill=diag_fill)
     ws.freeze_panes = "C2"
@@ -380,7 +408,7 @@ def main():
     title_cell.font = Font(bold=True, size=11)
     ws.merge_cells(start_row=notes_start, start_column=1, end_row=notes_start, end_column=18)
     notes = [
-        ("Same-session", "Aynı oturum çiftleri identity ile karşılaştırılır; düşük Dice segmentasyon/şekil kaynaklıdır."),
+        ("Same-session", "Aynı oturum çiftleri kendi oturum referans grid'inde identity ile karşılaştırılır; düşük Dice segmentasyon/şekil kaynaklıdır."),
         ("Cross-session Aorta", "Rigid centroid residual küçük; kalan fark Aorta boundary/segmentasyon farkıdır."),
         ("Cross-session Spleen", "Düşük Spleen vakalarında centroid residual daha büyük; refinement yardımcı olabilir."),
         ("QC", "QC işaretli seriler ayrı değerlendirilmeli; overlay yalnızca görsel kontrol içindir."),
