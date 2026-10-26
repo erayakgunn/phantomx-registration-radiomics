@@ -146,14 +146,14 @@ def landmark_rigid_output_transform(
     """Estimate a rigid moving-to-fixed transform from matching label centroids."""
     fixed_stats = sitk.LabelShapeStatisticsImageFilter()
     moving_stats = sitk.LabelShapeStatisticsImageFilter()
+    fixed_stats.Execute(fixed_seg)
+    moving_stats.Execute(moving_seg)
     fixed_points = []
     moving_points = []
     for label in labels:
-        fixed_stats.Execute(sitk.Cast(fixed_seg == label, sitk.sitkUInt8))
-        moving_stats.Execute(sitk.Cast(moving_seg == label, sitk.sitkUInt8))
-        if fixed_stats.HasLabel(1) and moving_stats.HasLabel(1):
-            fixed_points.append(fixed_stats.GetCentroid(1))
-            moving_points.append(moving_stats.GetCentroid(1))
+        if fixed_stats.HasLabel(label) and moving_stats.HasLabel(label):
+            fixed_points.append(fixed_stats.GetCentroid(label))
+            moving_points.append(moving_stats.GetCentroid(label))
     if len(fixed_points) < 3:
         return sitk.AffineTransform(3)
     fixed_points = np.asarray(fixed_points, dtype=float)

@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 
-WORKFLOW_VERSION = 7
+WORKFLOW_VERSION = "1.0.0"
 TAKE1_PATTERN = re.compile(r"_take1(?![0-9])")
 SERIES_SUFFIX_PATTERN = re.compile(r"_s\d+$")
 
@@ -81,18 +81,24 @@ def _main(args: argparse.Namespace) -> int:
         if path.is_dir() and (path / "nifti").is_dir() and (path / "segmentation").is_dir()
     )
     all_series = [(session.name, *item) for session in sessions for item in series_files(session)]
-    fixed_candidates = [
-        item for item in all_series
-        if item[0] == args.fixed_session and TAKE1_PATTERN.search(item[1])
-    ]
-    base_candidates = [
-        item for item in fixed_candidates
-        if not SERIES_SUFFIX_PATTERN.search(item[1])
-    ]
-    if len(base_candidates) == 1:
-        fixed_candidates = base_candidates
+    if args.fixed_series:
+        fixed_candidates = [
+            item for item in all_series
+            if item[0] == args.fixed_session and item[1] == args.fixed_series
+        ]
+    else:
+        fixed_candidates = [
+            item for item in all_series
+            if item[0] == args.fixed_session and TAKE1_PATTERN.search(item[1])
+        ]
+        base_candidates = [
+            item for item in fixed_candidates
+            if not SERIES_SUFFIX_PATTERN.search(item[1])
+        ]
+        if len(base_candidates) == 1:
+            fixed_candidates = base_candidates
     if len(fixed_candidates) != 1:
-        raise RuntimeError("Fixed session/take1 bulunamadı veya benzersiz değil")
+        raise RuntimeError("Fixed seri bulunamadı veya benzersiz değil")
     fixed_session, fixed_name, fixed_ct, fixed_seg = fixed_candidates[0]
     moving = [item for item in all_series if item[1] != fixed_name or item[0] != fixed_session]
     moving.sort(key=lambda item: (item[0], item[1]))
@@ -158,6 +164,7 @@ def parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="Run resumable PhantomX registration pairs")
     ap.add_argument("dataset_root", type=Path, help="PhantomX/LABELED")
     ap.add_argument("--fixed-session", required=True, help="e.g. 20260805_PCCT_Aorta_Spleen")
+    ap.add_argument("--fixed-series", help="Exact series folder name; overrides take1 discovery")
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--labels", type=int, nargs="+", default=[1, 52])
     ap.add_argument("--limit", type=int)

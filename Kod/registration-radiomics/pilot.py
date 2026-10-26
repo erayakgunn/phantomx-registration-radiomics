@@ -33,7 +33,7 @@ DEFAULT_REGISTRATION_LABELS = (
     116,                  # sternum
 )
 REGISTRATION_METRIC = "correlation"
-WORKFLOW_VERSION = 7
+WORKFLOW_VERSION = "1.0.0"
 VERTEBRA_LABELS = tuple(range(27, 44))
 
 
@@ -300,7 +300,7 @@ def _run(args: argparse.Namespace, output: Path) -> None:
             accepted_candidates = []
             if candidate_transform is not None:
                 print("[3/5] Transform CT ve maskeye uygulanıyor", flush=True)
-                output_transform = candidate_transform.GetInverse()
+                output_transform = candidate_transform
                 candidate_stable = resample_mask(
                     moving_stable_mask, fixed_stable_mask, output_transform
                 )
