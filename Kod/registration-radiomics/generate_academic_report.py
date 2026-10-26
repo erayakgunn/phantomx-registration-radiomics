@@ -1,4 +1,4 @@
-"""Build a Turkish academic DOCX report from the completed V6 analysis."""
+"""Build a Turkish academic DOCX report from the completed v1.0.0 analysis."""
 
 from __future__ import annotations
 
@@ -107,11 +107,11 @@ def make_figures(reg_root: Path, analysis: Path, figures: Path):
     fig, ax = plt.subplots(figsize=(7.5, 4.2))
     x = np.arange(len(organs))
     ax.bar(x - .18, before, .36, label="Registration öncesi", color="#9aa6b2")
-    ax.bar(x + .18, after, .36, label="V6 sonrası", color="#2878B5")
+    ax.bar(x + .18, after, .36, label="v1.0.0 sonrası", color="#2878B5")
     ax.set_xticks(x, [name for _, name in organs])
     ax.set_ylim(0, 1.05)
     ax.set_ylabel("Ortalama Dice")
-    ax.set_title("V6 registration öncesi/sonrası organ overlap")
+    ax.set_title("v1.0.0 registration öncesi/sonrası organ overlap")
     ax.legend(frameon=False)
     ax.grid(axis="y", alpha=.2)
     fig.tight_layout()
@@ -123,7 +123,7 @@ def make_figures(reg_root: Path, analysis: Path, figures: Path):
     labels = list(methods)
     ax.bar(labels, [methods[k] for k in labels], color="#4C956C")
     ax.set_ylabel("Pair sayısı")
-    ax.set_title("V6’da kullanılan dönüşüm yöntemi")
+    ax.set_title("v1.0.0’da kullanılan dönüşüm yöntemi")
     ax.tick_params(axis="x", labelrotation=20)
     ax.grid(axis="y", alpha=.2)
     fig.tight_layout()
@@ -155,6 +155,15 @@ def main(args: argparse.Namespace):
         reg_root, analysis, figure_dir
     )
 
+    n_pairs = 0
+    ge90 = {"1": 0, "52": 0}
+    for f in reg_root.glob("*/metrics.csv"):
+        n_pairs += 1
+        data = {row["label"]: row for row in csv.DictReader(f.open(encoding="utf-8"))}
+        for lab in ("1", "52"):
+            if float(data[lab]["after_dice"]) >= 0.90:
+                ge90[lab] += 1
+
     doc = Document()
     section = doc.sections[0]
     section.top_margin = Inches(.7)
@@ -174,7 +183,7 @@ def main(args: argparse.Namespace):
     title.add_run("Longitudinal PhantomX CT’de Organ Radyomik Ölçümlerinin\nRegistration-Based Spatial Standardization’ı")
     subtitle = doc.add_paragraph()
     subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    subtitle.add_run("V6 analiz raporu | 6 Ekim 2026").italic = True
+    subtitle.add_run("v1.0.0 analiz raporu | 26 Ekim 2026").italic = True
     doc.add_paragraph()
 
     doc.add_heading("Özet", level=1)
@@ -234,7 +243,7 @@ def main(args: argparse.Namespace):
         for organ in ("spleen", "aorta"):
             values = [float(row["dice"]) for row in ceiling if row["organ"] == organ]
             ceilings[organ] = (statistics.median(values), max(values))
-        add_table(doc, ["Organ", "Aynı oturum median Dice", "Gözlenen maksimum Dice", "V6 ortalama final Dice"], [
+        add_table(doc, ["Organ", "Aynı oturum median Dice", "Gözlenen maksimum Dice", "v1.0.0 ortalama final Dice"], [
             ["Spleen", f"{ceilings['spleen'][0]:.4f}", f"{ceilings['spleen'][1]:.4f}", f"{dice_after[0]:.4f}"],
             ["Aorta", f"{ceilings['aorta'][0]:.4f}", f"{ceilings['aorta'][1]:.4f}", f"{dice_after[1]:.4f}"],
         ])
@@ -255,17 +264,17 @@ def main(args: argparse.Namespace):
     doc.add_heading("Registration Sonuçları", level=1)
     add_table(doc, ["Ölçüm", "Spleen", "Aorta"], [
         ["Ortalama Dice, öncesi", f"{dice_before[0]:.4f}", f"{dice_before[1]:.4f}"],
-        ["Ortalama Dice, V6 sonrası", f"{dice_after[0]:.4f}", f"{dice_after[1]:.4f}"],
-        ["Dice ≥ 0.90 pair sayısı", "85 / 88", "84 / 88"],
+        ["Ortalama Dice, v1.0.0 sonrası", f"{dice_after[0]:.4f}", f"{dice_after[1]:.4f}"],
+        ["Dice ≥ 0.90 pair sayısı", f"{ge90['1']} / {n_pairs}", f"{ge90['52']} / {n_pairs}"],
         ["Dice = 0 pair sayısı", "0", "0"],
     ])
-    add_table(doc, ["V6 dönüşüm yöntemi", "Pair sayısı"], [
+    add_table(doc, ["v1.0.0 dönüşüm yöntemi", "Pair sayısı"], [
         [method, count] for method, count in methods.items()
     ])
     doc.add_picture(str(dice_fig), width=Inches(6.4))
-    add_caption(doc, "Şekil 1. V6 registration öncesi ve sonrası ortalama organ Dice değerleri.")
+    add_caption(doc, "Şekil 1. v1.0.0 registration öncesi ve sonrası ortalama organ Dice değerleri.")
     doc.add_picture(str(method_fig), width=Inches(6.4))
-    add_caption(doc, "Şekil 2. V6’da pair başına kullanılan dönüşüm yöntemi.")
+    add_caption(doc, "Şekil 2. v1.0.0’da pair başına kullanılan dönüşüm yöntemi.")
 
     doc.add_heading("Dönüşüm Bileşenlerinin Ayrıştırılması: Identity, Translation, Rotation ve Registration", level=1)
     doc.add_paragraph(
@@ -462,9 +471,38 @@ def main(args: argparse.Namespace):
         "karşılaştırma 85 ortak pair’i kapsar."
     )
 
+    doc.add_heading("Tüm-Çift Pairwise Raporu ve Analitik Sayfa", level=1)
+    doc.add_paragraph(
+        "Organ maskelerinin yalnızca tek bir fixed referansa göre değil, tüm seri çiftleri "
+        "arasında da karşılaştırılabilmesi için SEP ve PCCT veri setleri için all-pairs "
+        "pairwise raporları üretildi. Aynı oturum çiftleri kendi oturum referans grid'inde "
+        "identity ile (zaten hizalı oldukları için), farklı oturum çiftleri ise fixed-referans "
+        "registration sonrası karşılaştırıldı. Her çift için Dice, ASSD, HD95 ve clDice "
+        "hesaplandı; sonuçlar Summary, Pairs, Improvements, Date_Summary ve Dice_Diagnostics "
+        "sayfalarıyla Excel'e yazıldı."
+    )
+    add_table(doc, ["Veri seti", "Seri", "Pair", "Aynı oturum", "Farklı oturum"], [
+        ["SEP", "68", "2278", "389", "1889"],
+        ["PCCT", "89", "3916", "186", "3730"],
+    ])
+    doc.add_paragraph(
+        "Aynı oturum içindeki tekrarlar yüksek Dice verdi (identity); farklı oturumlarda "
+        "rigid/landmark registration Dice'ı belirgin biçimde yükseltti. Düşük Dice'lı seriler "
+        "dışlanmadı, gerekçeleriyle notlandı: SEP'te 20260731_t20 (zayıf rigid hizalama, "
+        "HD95 4–5 mm) ve 20260128_t1 (identity; segmentasyon/şekil), PCCT'te 20260601_t1 "
+        "(HD95 2.0 mm, aorta sınırlayıcı) ve 20260622_t3 (ince kemik kabuğu/şekil farkı). "
+        "20260622 _s1005 ise _s2087 ile aynı ışınlamadır; Dice'ı iyi olduğu için kalite "
+        "nedeniyle değil, yalnızca çift sayımı kaygısıyla ayrıca belirtilmiştir."
+    )
+    doc.add_paragraph(
+        "Etkileşimli analitik sayfa; tüm-çift Dice matrisini (mutlak Dice ve kazanç modları), "
+        "Dice dağılımını, tarih-çifti kazanç sıralamasını ve düşük Dice tanılamasını içerir: "
+        "https://erayakgunn.github.io/registration-overlay/analytics.html"
+    )
+
     doc.add_heading("Tartışma", level=1)
     doc.add_paragraph(
-        "V6, organ maskelerinin spatial overlap’ını kuvvetle artırdı. Aynı zamanda "
+        "v1.0.0, organ maskelerinin spatial overlap’ını kuvvetle artırdı. Aynı zamanda "
         "session-aware analiz, radyomik repeatability etkisinin feature-dependent "
         "olduğunu gösterdi. Registered ve identity/world-space arasındaki feature "
         "farkları resampling/interpolation etkisini de içerir. Dolayısıyla geometrik "
@@ -485,7 +523,7 @@ def main(args: argparse.Namespace):
 
     doc.add_heading("Sonuç", level=1)
     doc.add_paragraph(
-        "V6’da rigid ve landmark/centroid tabanlı spatial standardization, "
+        "v1.0.0’da rigid ve landmark/centroid tabanlı spatial standardization, "
         "longitudinal PhantomX organ maskelerinin geometrik uyumunu belirgin "
         "biçimde artırdı. Ancak radiomic repeatability’de kazanım tüm feature’lara "
         "yayılmadı; bazı feature ailelerinde iyileşme, bazılarında kötüleşme görüldü. "
@@ -501,7 +539,7 @@ def main(args: argparse.Namespace):
 
 
 def parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(description="Generate V6 academic DOCX report")
+    ap = argparse.ArgumentParser(description="Generate v1.0.0 academic DOCX report")
     ap.add_argument("dataset_root", type=Path)
     ap.add_argument("registration_root", type=Path)
     ap.add_argument("--output", type=Path, required=True)
