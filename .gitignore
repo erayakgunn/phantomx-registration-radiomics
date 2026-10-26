@@ -15,7 +15,7 @@ MANIFEST.xlsx
 *.png
 *.pdf
 *.docx
-!RAPOR_AKADEMIK_REGISTRATION_RADIOMICS_V6.docx
+!RAPOR_AKADEMIK_REGISTRATION_RADIOMICS_v1.0.0.docx
 
 # Python environments and caches
 **/.venv/
