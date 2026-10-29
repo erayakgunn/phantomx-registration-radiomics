@@ -47,7 +47,14 @@ def main(args: argparse.Namespace) -> None:
         and (path / "seg_registered.nii.gz").exists()
     )
     for pair in pair_dirs:
-        session, series = pair.name.split("__", 1)
+        if args.session:
+            prefix = f"{args.session}__"
+            if not pair.name.startswith(prefix):
+                continue
+            session = args.session
+            series = pair.name[len(prefix):]
+        else:
+            session, series = pair.name.split("__", 1)
         moving_path = args.dataset_root / session / "segmentation" / series / "seg.nii.gz"
         if not moving_path.exists():
             continue
@@ -85,9 +92,10 @@ def main(args: argparse.Namespace) -> None:
         plt.close(figure)
 
     with (output / "visual_qc_metrics.csv").open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
-        writer.writeheader()
-        writer.writerows(rows)
+        if rows:
+            writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
     print(f"[visual-qc] {len(pair_dirs)} pair için çıktı: {output}")
 
 
@@ -97,6 +105,7 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("registration_root", type=Path)
     ap.add_argument("--fixed-ct", type=Path, required=True)
     ap.add_argument("--fixed-seg", type=Path, required=True)
+    ap.add_argument("--session")
     return ap
 
 

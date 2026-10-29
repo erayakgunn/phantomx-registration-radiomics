@@ -36,7 +36,8 @@ def series_files(session: Path) -> list[tuple[str, Path, Path]]:
 
 def _process_pair(index: int, total: int, item, fixed_ct: Path,
                   fixed_seg: Path, output: Path, labels: list[int],
-                  threads_per_process: int, force: bool) -> dict:
+                  threads_per_process: int, force: bool,
+                  skip_threshold_mm: float) -> dict:
     session, name, ct, seg = item
     pair_output = output / f"{session}__{name}"
     state_path = pair_output / "pilot_state.json"
@@ -59,6 +60,7 @@ def _process_pair(index: int, total: int, item, fixed_ct: Path,
         "--moving-seg", str(seg),
         "--output", str(pair_output),
         "--labels", *[str(label) for label in labels],
+        "--skip-threshold-mm", str(skip_threshold_mm),
     ]
     if force:
         command.append("--force")
@@ -122,7 +124,7 @@ def _main(args: argparse.Namespace) -> int:
             pool.submit(
                 _process_pair, index, total, item,
                 fixed_ct, fixed_seg, args.output, args.labels,
-                threads_per_process, args.force,
+                threads_per_process, args.force, args.skip_threshold_mm,
             ): index
             for index, item in enumerate(moving, start=1)
         }
@@ -170,6 +172,7 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--limit", type=int)
     ap.add_argument("--workers", type=int, default=2)
     ap.add_argument("--session-filter")
+    ap.add_argument("--skip-threshold-mm", type=float, default=5.0)
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--stop-on-error", action="store_true")
     return ap
