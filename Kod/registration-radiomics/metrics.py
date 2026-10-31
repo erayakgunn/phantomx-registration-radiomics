@@ -49,7 +49,23 @@ def centroid_displacement(
 def _surface(mask: np.ndarray) -> np.ndarray:
     if not mask.any():
         return mask
-    return np.logical_xor(mask, binary_erosion(mask, structure=np.ones((3, 3, 3))))
+    # border_value=1 avoids treating the FOV cut plane as a real surface.
+    return np.logical_xor(
+        mask,
+        binary_erosion(mask, structure=np.ones((3, 3, 3)), border_value=1),
+    )
+
+
+def touches_border(image: sitk.Image, label: int) -> bool:
+    """True if the label touches any face of the image (FOV truncation)."""
+    array = sitk.GetArrayViewFromImage(image) == label
+    if not array.any():
+        return False
+    return bool(
+        array[0].any() or array[-1].any()
+        or array[:, 0].any() or array[:, -1].any()
+        or array[:, :, 0].any() or array[:, :, -1].any()
+    )
 
 
 def surface_metrics(
@@ -112,6 +128,8 @@ def compare_label(
         "centroid_displacement_mm": centroid_displacement(reference, candidate, label),
         "hd95_mm": hd95,
         "assd_mm": assd,
+        "reference_touches_border": touches_border(reference, label),
+        "candidate_touches_border": touches_border(candidate, label),
     }
 
 

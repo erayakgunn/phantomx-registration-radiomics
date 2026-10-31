@@ -11,6 +11,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+import numpy as np
 import SimpleITK as sitk
 
 from metrics import centroid_displacement, compare_label
@@ -52,9 +53,9 @@ except Exception:
 
 
 def label_union_mask(segmentation: sitk.Image, labels: list[int]) -> sitk.Image:
-    array = sitk.GetArrayFromImage(segmentation)
-    mask = sum((array == label for label in labels), start=(array == -1))
-    result = sitk.GetImageFromArray(mask.astype("uint8"))
+    array = sitk.GetArrayViewFromImage(segmentation)
+    mask = np.isin(array, labels).astype("uint8")
+    result = sitk.GetImageFromArray(mask)
     result.CopyInformation(segmentation)
     return result
 
@@ -90,6 +91,8 @@ def _metric_row(fixed_seg: sitk.Image, moving_seg: sitk.Image,
         "after_hd95_mm": after["hd95_mm"],
         "before_assd_mm": before["assd_mm"],
         "after_assd_mm": after["assd_mm"],
+        "before_touches_border": before["candidate_touches_border"],
+        "after_touches_border": after["candidate_touches_border"],
     }
 
 
@@ -126,6 +129,59 @@ def _passes_stable_qc(before: dict, after: dict) -> bool:
     )
 
 
+HOLDOUT_LABELS = (*range(92, 116), 116)  # ribs + sternum, not used by the vertebrae fit
+
+
+def _holdout_tre(fixed_seg: sitk.Image, moving_seg: sitk.Image,
+                 transform: sitk.Transform, labels) -> float:
+    """Mean target registration error on labels that were not used for the fit."""
+    fixed_stats = sitk.LabelShapeStatisticsImageFilter()
+    moving_stats = sitk.LabelShapeStatisticsImageFilter()
+    fixed_stats.Execute(fixed_seg)
+    moving_stats.Execute(moving_seg)
+    inverse = transform.GetInverse()
+    distances = []
+    for label in labels:
+        if fixed_stats.HasLabel(label) and moving_stats.HasLabel(label):
+            fixed_centroid = np.array(fixed_stats.GetCentroid(label), dtype=float)
+            moving_centroid = np.array(moving_stats.GetCentroid(label), dtype=float)
+            moved = np.array(
+                inverse.TransformPoint(tuple(float(v) for v in moving_centroid)),
+                dtype=float,
+            )
+            distances.append(float(np.linalg.norm(moved - fixed_centroid)))
+    return float(np.mean(distances)) if distances else float("inf")
+
+
+def _pid_alive(pid: int) -> bool:
+    """Check process liveness without killing it (os.kill(pid, 0) kills on Windows)."""
+    if os.name == "nt":
+        import ctypes
+
+        process_query_limited_information = 0x1000
+        still_active = 259
+        handle = ctypes.windll.kernel32.OpenProcess(
+            process_query_limited_information, False, int(pid)
+        )
+        if not handle:
+            return False
+        try:
+            exit_code = ctypes.c_ulong()
+            ok = ctypes.windll.kernel32.GetExitCodeProcess(
+                handle, ctypes.byref(exit_code)
+            )
+            return bool(ok) and exit_code.value == still_active
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
 def _landmark_label_sets(registration_labels: list[int]):
     """Return robust landmark label subsets, vertebrae first.
 
@@ -143,6 +199,11 @@ def _landmark_label_sets(registration_labels: list[int]):
 
 def _run(args: argparse.Namespace, output: Path) -> None:
     print("[1/5] CT ve segmentation dosyaları okunuyor", flush=True)
+    ct_interpolator = {
+        "linear": sitk.sitkLinear,
+        "bspline": sitk.sitkBSpline,
+        "windowed_sinc": sitk.sitkLanczosWindowedSinc,
+    }[args.ct_interpolator]
     fixed_ct = read_image(Path(args.fixed_ct), sitk.sitkFloat32)
     moving_ct = read_image(Path(args.moving_ct), sitk.sitkFloat32)
     fixed_seg = read_image(Path(args.fixed_seg), sitk.sitkUInt16)
@@ -163,10 +224,11 @@ def _run(args: argparse.Namespace, output: Path) -> None:
     registration_labels = args.registration_labels or list(DEFAULT_REGISTRATION_LABELS)
     if not registration_labels:
         raise ValueError("Provide --registration-labels or --labels")
+    fixed_labels = np.unique(sitk.GetArrayViewFromImage(fixed_seg))
+    moving_labels = np.unique(sitk.GetArrayViewFromImage(moving_seg))
     labels = args.labels or sorted(
-        set(sitk.GetArrayViewFromImage(fixed_seg).ravel())
-        & set(sitk.GetArrayViewFromImage(moving_seg).ravel())
-        - {0}
+        int(value) for value in np.intersect1d(fixed_labels, moving_labels)
+        if int(value) != 0
     )
     metadata = {
         "workflow_version": WORKFLOW_VERSION,
@@ -216,6 +278,7 @@ def _run(args: argparse.Namespace, output: Path) -> None:
         )
         stable_before = _stable_score(fixed_stable_mask, moving_stable_on_fixed)
         registration_method = "identity"
+        selected_tre = float("inf")
         baseline_displacements = [
             centroid_displacement(fixed_seg, moving_seg, label)
             for label in labels
@@ -240,7 +303,7 @@ def _run(args: argparse.Namespace, output: Path) -> None:
                 moving_ct,
                 fixed_ct,
                 transform,
-                sitk.sitkLinear,
+                ct_interpolator,
                 default_value=-1024.0,
             )
             registered_seg = moving_seg_on_fixed
@@ -340,12 +403,19 @@ def _run(args: argparse.Namespace, output: Path) -> None:
                     )
 
             if accepted_candidates:
-                best_dice, transform, registration_method, stable_after = max(
-                    accepted_candidates, key=lambda item: item[0]
+                scored = []
+                for dice_value, candidate, method_name, score in accepted_candidates:
+                    if method_name == "landmark_rigid_fallback":
+                        tre = float("inf")  # fits ribs as well; no clean hold-out
+                    else:
+                        tre = _holdout_tre(fixed_seg, moving_seg, candidate, HOLDOUT_LABELS)
+                    scored.append((tre, dice_value, candidate, method_name, score))
+                selected_tre, best_dice, transform, registration_method, stable_after = min(
+                    scored, key=lambda item: (item[0], -item[1])
                 )
                 registered_ct = resample_image(
                     moving_ct, fixed_ct, transform,
-                    sitk.sitkLinear, default_value=-1024.0
+                    ct_interpolator, default_value=-1024.0
                 )
                 registered_seg = resample_mask(moving_seg, fixed_seg, transform)
                 accepted = True
@@ -366,18 +436,21 @@ def _run(args: argparse.Namespace, output: Path) -> None:
                     transform = fallback_transform
                     registered_ct = resample_image(
                         moving_ct, fixed_ct, transform,
-                        sitk.sitkLinear, default_value=-1024.0
+                        ct_interpolator, default_value=-1024.0
                     )
                     registered_seg = resample_mask(moving_seg, fixed_seg, transform)
                     stable_after = fallback_score
                     accepted = True
                     registration_method = "centroid_translation_fallback"
+                    selected_tre = _holdout_tre(
+                        fixed_seg, moving_seg, fallback_transform, HOLDOUT_LABELS
+                    )
                     print("[qc] Centroid translation fallback kabul edildi", flush=True)
                 else:
                     transform = sitk.Transform(3, sitk.sitkIdentity)
                     registered_ct = resample_image(
                         moving_ct, fixed_ct, transform,
-                        sitk.sitkLinear, default_value=-1024.0
+                        ct_interpolator, default_value=-1024.0
                     )
                     registered_seg = moving_seg_on_fixed
                     stable_after = stable_before
@@ -390,6 +463,7 @@ def _run(args: argparse.Namespace, output: Path) -> None:
             "registration_method": registration_method,
             "registration_error": registration_error,
             "target_max_centroid_displacement_mm": max_displacement,
+            "holdout_tre_mm": None if not math.isfinite(selected_tre) else round(selected_tre, 3),
         }
         _atomic_json(output / "registration_qc.json", registration_qc)
         sitk.WriteTransform(transform, str(transform_path))
@@ -458,12 +532,12 @@ def run(args: argparse.Namespace) -> None:
     except FileExistsError:
         try:
             previous_pid = int(lock_path.read_text(encoding="ascii").strip())
-            os.kill(previous_pid, 0)
-        except (FileNotFoundError, ProcessLookupError, ValueError, PermissionError, OSError):
-            lock_path.unlink(missing_ok=True)
-            descriptor = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        else:
+        except (FileNotFoundError, ValueError):
+            previous_pid = None
+        if previous_pid is not None and _pid_alive(previous_pid):
             raise RuntimeError(f"Bu output klasörü zaten çalışıyor: {lock_path}")
+        lock_path.unlink(missing_ok=True)
+        descriptor = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     os.write(descriptor, str(os.getpid()).encode("ascii"))
     os.close(descriptor)
     try:
@@ -484,6 +558,7 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--registration-spacing", type=float, default=2.0)
     ap.add_argument("--skip-threshold-mm", type=float, default=5.0)
     ap.add_argument("--transform-kind", choices=("rigid", "translation"), default="rigid")
+    ap.add_argument("--ct-interpolator", choices=("linear", "bspline", "windowed_sinc"), default="linear")
     ap.add_argument("--force", action="store_true")
     return ap
 

@@ -115,9 +115,9 @@ def translation_centroid_initial_transform(
     fixed_centroid = np.asarray(stats_fixed.GetCentroid(1), dtype=float)
     moving_centroid = np.asarray(stats_moving.GetCentroid(1), dtype=float)
     transform = sitk.TranslationTransform(3)
-    # TranslationTransform is passed directly to the registration metric,
-    # whose fixed-to-moving mapping uses the opposite physical shift.
-    transform.SetOffset(tuple(fixed_centroid - moving_centroid))
+    # The registration metric's transform maps fixed points to moving points,
+    # so the offset must be moving_centroid - fixed_centroid.
+    transform.SetOffset(tuple(moving_centroid - fixed_centroid))
     return transform
 
 

@@ -17,6 +17,35 @@ TAKE1_PATTERN = re.compile(r"_take1(?![0-9])")
 SERIES_SUFFIX_PATTERN = re.compile(r"_s\d+$")
 
 
+def _pid_alive(pid: int) -> bool:
+    """Check process liveness without killing it (os.kill(pid, 0) kills on Windows)."""
+    if os.name == "nt":
+        import ctypes
+
+        process_query_limited_information = 0x1000
+        still_active = 259
+        handle = ctypes.windll.kernel32.OpenProcess(
+            process_query_limited_information, False, int(pid)
+        )
+        if not handle:
+            return False
+        try:
+            exit_code = ctypes.c_ulong()
+            ok = ctypes.windll.kernel32.GetExitCodeProcess(
+                handle, ctypes.byref(exit_code)
+            )
+            return bool(ok) and exit_code.value == still_active
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
 for stream in (sys.stdout, sys.stderr):
     try:
         stream.reconfigure(encoding="utf-8", errors="replace")
@@ -37,7 +66,7 @@ def series_files(session: Path) -> list[tuple[str, Path, Path]]:
 def _process_pair(index: int, total: int, item, fixed_ct: Path,
                   fixed_seg: Path, output: Path, labels: list[int],
                   threads_per_process: int, force: bool,
-                  skip_threshold_mm: float) -> dict:
+                  skip_threshold_mm: float, ct_interpolator: str) -> dict:
     session, name, ct, seg = item
     pair_output = output / f"{session}__{name}"
     state_path = pair_output / "pilot_state.json"
@@ -61,6 +90,7 @@ def _process_pair(index: int, total: int, item, fixed_ct: Path,
         "--output", str(pair_output),
         "--labels", *[str(label) for label in labels],
         "--skip-threshold-mm", str(skip_threshold_mm),
+        "--ct-interpolator", ct_interpolator,
     ]
     if force:
         command.append("--force")
@@ -125,6 +155,7 @@ def _main(args: argparse.Namespace) -> int:
                 _process_pair, index, total, item,
                 fixed_ct, fixed_seg, args.output, args.labels,
                 threads_per_process, args.force, args.skip_threshold_mm,
+                args.ct_interpolator,
             ): index
             for index, item in enumerate(moving, start=1)
         }
@@ -147,13 +178,13 @@ def main(args: argparse.Namespace) -> int:
     except FileExistsError:
         try:
             previous_pid = int(lock_path.read_text(encoding="ascii").strip())
-            os.kill(previous_pid, 0)
-        except (FileNotFoundError, ProcessLookupError, ValueError, PermissionError, OSError):
-            lock_path.unlink(missing_ok=True)
-            descriptor = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        else:
+        except (FileNotFoundError, ValueError):
+            previous_pid = None
+        if previous_pid is not None and _pid_alive(previous_pid):
             print(f"[batch] zaten çalışıyor: {lock_path}", flush=True)
             return 2
+        lock_path.unlink(missing_ok=True)
+        descriptor = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     os.write(descriptor, str(os.getpid()).encode("ascii"))
     os.close(descriptor)
     try:
@@ -173,6 +204,7 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--workers", type=int, default=2)
     ap.add_argument("--session-filter")
     ap.add_argument("--skip-threshold-mm", type=float, default=5.0)
+    ap.add_argument("--ct-interpolator", choices=("linear", "bspline", "windowed_sinc"), default="linear")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--stop-on-error", action="store_true")
     return ap
