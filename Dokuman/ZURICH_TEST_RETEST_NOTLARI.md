@@ -110,3 +110,18 @@ Tanım: referans take1 organ merkezinden sabit fiziksel küp (liver 30 mm, aorta
 
 Eksik yok. `_2` 140 kVp klasörleri nifti/seg üretilmediği için kapsam dışı.
 Feature extraction bilinçli olarak yapılmadı.
+
+## 9. Farklı tarih (cross-date) VOI
+
+Script: `Kod/registration-radiomics/voi_registered.py`
+Mevcut registration'lar (fixed 20260805 take1) üzerinde aynı merkezli liver/aorta VOI.
+
+| Veri | Organ | n | frac_mean | frac_min | shift_mean | shift_max | HU |
+|---|---|---|---|---|---|---|---|
+| PCCT | liver | 88 | 0.994 | 0.983 | 0.32 | 0.77 | 156.3 |
+| PCCT | aorta | 88 | 0.986 | 0.970 | 0.32 | 0.80 | 178.7 |
+| SEP | liver | 67 | 0.999 | 0.993 | 0.41 | 4.07 | 98.5 |
+| SEP | aorta | 67 | 0.992 | 0.971 | 0.50 | 7.92 | 116.7 |
+
+Test-retest ile kıyas: VOI organ kapsaması ~0.99 (aynı seviye), ortalama centroid shift sub-mm.
+SEP'te birkaç aykırı: `_s80` 7.9 mm ve `S3 take1` 4.1 mm (bilinen düşük-kalite seriler).
