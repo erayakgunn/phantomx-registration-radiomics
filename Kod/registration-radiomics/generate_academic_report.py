@@ -147,6 +147,52 @@ def make_figures(reg_root: Path, analysis: Path, figures: Path):
     return dice_fig, method_fig, family_fig, methods, before, after
 
 
+def make_method_flowchart(path: Path) -> Path:
+    from matplotlib.patches import FancyBboxPatch
+
+    fig, ax = plt.subplots(figsize=(8.2, 11.2))
+    ax.set_xlim(0, 10)
+    ax.set_ylim(0, 12)
+    ax.axis("off")
+
+    def box(x, y, w, h, text, fc="#EEF3FA", ec="#2F5496", fs=8.4):
+        patch = FancyBboxPatch((x - w / 2, y - h / 2), w, h,
+                               boxstyle="round,pad=0.02,rounding_size=0.18",
+                               fc=fc, ec=ec, lw=1.4)
+        ax.add_patch(patch)
+        ax.text(x, y, text, ha="center", va="center", fontsize=fs, linespacing=1.35)
+
+    def arrow(x1, y1, x2, y2, color="#2F5496"):
+        ax.annotate("", xy=(x2, y2), xytext=(x1, y1),
+                    arrowprops=dict(arrowstyle="-|>", color=color, lw=1.5,
+                                    shrinkA=2, shrinkB=2))
+
+    cx, w = 3.7, 6.4
+    box(cx, 11.2, w, 1.0, "Fixed referans (20260805 take1)  +  Moving seri")
+    box(cx, 9.9, w, 1.2, "Stabil kemik maskesi\nomurga 27–43 · kaburga 92–116 · sternum 116\n(hedef organlar transform seçiminde kullanılmaz)")
+    box(cx, 8.3, w, 0.9, "Organ centroid farkı ≤ skip eşiği ?", fc="#FFF4E5", ec="#D48A3A")
+    box(8.4, 8.3, 2.6, 0.9, "Identity\n(hiç dokunma)", fc="#E8F5EC", ec="#3A9A5B")
+    box(cx, 6.9, w, 0.9, "Başlangıç: kemik centroid ötelemesi (sadece öteleme)")
+    box(cx, 5.5, w, 1.2, "Adaylar\n• Correlation rigid (6-DOF Euler, CT, kemik maskesi içinde)\n• Landmark rigid (Kabsch/SVD): vertebra-öncelikli + tam set")
+    box(cx, 4.0, w, 0.9, "QC: stabil kemik Dice artmalı\ncentroid +0.5 mm · HD95 +1.0 mm · ASSD +0.25 mm toleransı")
+    box(cx, 2.6, w, 1.1, "QC'yi geçen aday var mı?\nEvet → en yüksek kemik Dice'lı aday\nHayır → centroid öteleme → (o da geçmezse) identity", fc="#FFF4E5", ec="#D48A3A")
+    box(cx, 1.0, w, 1.0, "Seçilen tek transformu uygula\nCT: lineer · maskeler: nearest-neighbor\n→ registered CT/seg + Dice/HD95/ASSD")
+
+    arrow(cx, 10.7, cx, 10.5)
+    arrow(cx, 9.3, cx, 8.75)
+    arrow(cx, 7.85, cx, 7.35)
+    arrow(cx, 6.45, cx, 6.1)
+    arrow(cx, 4.9, cx, 4.45)
+    arrow(cx, 3.55, cx, 3.15)
+    arrow(cx, 2.05, cx, 1.5)
+    arrow(cx + w / 2, 8.3, 7.1, 8.3, color="#3A9A5B")
+
+    fig.tight_layout()
+    fig.savefig(path, dpi=180, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    return path
+
+
 def main(args: argparse.Namespace):
     reg_root = args.registration_root
     analysis = reg_root / "analysis"
@@ -229,9 +275,24 @@ def main(args: argparse.Namespace):
         "nearest-neighbor interpolation ile fixed grid’e taşındı."
     )
     doc.add_paragraph(
-        "Aday dönüşümün kabulünde stabil Dice’ın artması ve centroid displacement, "
+        "Aday dönüşümün kabulünde stabil Dice'ın artması ve centroid displacement, "
         "HD95, ASSD değerlerinin tanımlı toleranslarda kalması şart koşuldu. Böylece "
-        "hedef organ maskeleri registration’ı seçmek için kullanılmadı."
+        "hedef organ maskeleri registration'ı seçmek için kullanılmadı."
+    )
+    flowchart_fig = make_method_flowchart(figure_dir / "method_flowchart.png")
+    doc.add_picture(str(flowchart_fig), width=Inches(6.2))
+    add_caption(
+        doc,
+        "Şekil. Registration yöntem akışı: stabil kemik maskesi, centroid ötelemesi "
+        "(başlangıç), correlation/landmark rigid adayları, kemik-Dice QC ve en iyi aday seçimi.",
+    )
+    doc.add_paragraph(
+        "Akış özeti: (1) stabil kemik maskesi çıkarılır; (2) organ centroid farkı eşiğin "
+        "altındaysa identity; (3) aksi halde kemik centroid ötelemesi başlangıç alınır; "
+        "(4) correlation rigid ve landmark rigid (Kabsch/SVD) adayları üretilir; "
+        "(5) her aday kemik Dice ve centroid/HD95/ASSD toleransıyla QC edilir; "
+        "(6) geçen adaylar arasından en yüksek kemik Dice'lısı seçilir; "
+        "(7) hiçbiri geçmezse centroid öteleme, o da geçmezse identity uygulanır."
     )
 
     doc.add_heading("Dice Eşiği ve Yorum", level=1)
