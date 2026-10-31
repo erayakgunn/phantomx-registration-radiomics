@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import queue
 import csv
+import os
 import subprocess
 import sys
 import threading
@@ -302,7 +303,10 @@ class RegistrationGui(tk.Tk):
         render()
 
     def _show_volume_viewer(self) -> None:
-        root = ROOT / "PhantomX" / "REGISTRATION" / "batch_to_20260805_v6"
+        root = Path(os.environ.get(
+            "PHANTOMX_BATCH",
+            str(ROOT / "PhantomX" / "REGISTRATION" / "batch_to_20260805_v6"),
+        ))
         pair_dirs = sorted(
             path for path in root.iterdir()
             if path.is_dir() and "__" in path.name
@@ -321,7 +325,10 @@ class RegistrationGui(tk.Tk):
                 fixed_ct_path = candidates[0]
                 fixed_seg_path = dataset_root / "segmentation" / fixed_ct_path.parent.name / "seg.nii.gz"
         if not fixed_ct_path.is_file() or not fixed_seg_path.is_file():
-            fallback_root = ROOT / "PhantomX" / "LABELED" / "20260805_PCCT_Aorta_Spleen"
+            fallback_root = Path(os.environ.get(
+                "PHANTOMX_LABELED",
+                str(ROOT / "PhantomX" / "LABELED" / "20260805_PCCT_Aorta_Spleen"),
+            ))
             candidates = sorted(fallback_root.glob("nifti/*_take1/ct.nii.gz"))
             if candidates:
                 fixed_ct_path = candidates[0]

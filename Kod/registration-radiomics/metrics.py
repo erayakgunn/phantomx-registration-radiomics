@@ -138,6 +138,13 @@ def compare_labels(
 ) -> list[dict[str, float | int]]:
     if not labels:
         return []
+    reference_array = sitk.GetArrayFromImage(reference)
+    candidate_array = sitk.GetArrayFromImage(candidate)
     workers = min(max(1, os.cpu_count() or 1), len(labels))
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        return list(pool.map(lambda label: compare_label(reference, candidate, label), labels))
+        return list(pool.map(
+            lambda label: compare_label(
+                reference, candidate, label, reference_array, candidate_array
+            ),
+            labels,
+        ))

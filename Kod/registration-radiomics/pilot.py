@@ -230,6 +230,10 @@ def _run(args: argparse.Namespace, output: Path) -> None:
         int(value) for value in np.intersect1d(fixed_labels, moving_labels)
         if int(value) != 0
     )
+    if not labels:
+        raise ValueError(
+            "Fixed ve moving segmentasyonlarda ortak hedef organ etiketi bulunamadı"
+        )
     metadata = {
         "workflow_version": WORKFLOW_VERSION,
         "fixed_ct": str(Path(args.fixed_ct).resolve()),
