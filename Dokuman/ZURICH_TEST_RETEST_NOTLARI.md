@@ -87,3 +87,26 @@ Amaç: test-retest Dice'ı rekonstrüksiyon tavanına (0.9768 / 0.9502) yaklaşt
 - 0.99 veya rekonstrüksiyon tavanı rigid ile ulaşılabilir değil.
 - Konunun dışına çıkmadan (rigid içinde) yapılabilecek anlamlı iyileştirme kalmadı.
 - Sonraki adım: segmentasyon harmonizasyonu (konsensüs/STAPLE/re-segmentation) veya deformable (farklı yöntem, şekli değiştirir).
+
+## 7. VOI çıkarımı (feature hariç)
+
+Script: `Kod/registration-radiomics/voi_extract.py`
+Tanım: referans take1 organ merkezinden sabit fiziksel küp (liver 30 mm, aorta 10 mm).
+Çıktı: `zurich_pcct_work/VOI/<grup>/<organ>/<seri>/{ct_voi,seg_voi}.nii.gz`, `voi_metadata.json`, `VOI_SUMMARY.csv`.
+
+| Veri | Organ | Kapsama | Merkez kayması |
+|---|---|---|---|
+| PCCT | liver | 0.987–0.999 | 0.08–0.14 mm |
+| PCCT | aorta | 0.984–0.991 | 0.16–0.39 mm |
+| SEP | liver | 0.998–0.999 | 0.14–0.29 mm |
+| SEP | aorta | 0.983–0.992 | 0.14–0.37 mm |
+
+## 8. Tamlık durumu (feature hariç)
+
+| Veri | Grup | Seri | Reg pair | QC PNG | VOI kaydı |
+|---|---|---|---|---|---|
+| PCCT | 6 | 10 each | 9 each | 9 each | 20 each |
+| SEP | 5 | 10/10/10/20/10 | 9/9/9/19/9 | aynı | 20/20/20/40/20 |
+
+Eksik yok. `_2` 140 kVp klasörleri nifti/seg üretilmediği için kapsam dışı.
+Feature extraction bilinçli olarak yapılmadı.
