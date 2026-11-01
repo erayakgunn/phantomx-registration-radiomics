@@ -125,3 +125,26 @@ Mevcut registration'lar (fixed 20260805 take1) üzerinde aynı merkezli liver/ao
 
 Test-retest ile kıyas: VOI organ kapsaması ~0.99 (aynı seviye), ortalama centroid shift sub-mm.
 SEP'te birkaç aykırı: `_s80` 7.9 mm ve `S3 take1` 4.1 mm (bilinen düşük-kalite seriler).
+
+## 10. 140 kVp ek grupları (yeni veri, 31 Ekim 2026)
+
+`zurich_pcct/PCTT_20260929_2`: 20 → **40 seri**. Eklenen:
+- 140 kVp, 100 mAs, 1 mm PolyE ve MonoE70keV (her biri 10 take).
+
+Önemli:
+- Bu segmentasyonlar **farklı label map** kullanıyor: **spleen=3, aorta=6** (eski 1/52 değil).
+- Maskeler **sadece spleen + aorta** içeriyor; **kemik ve liver yok**.
+
+Yapılanlar:
+- `label_map.py` eklendi; etiketler **isimden** çözülüyor (vertebra/kaburga/sternum, spleen, aorta, liver).
+- `pilot.py`, `batch.py`, `batch_visual_qc.py`, `voi_extract.py`, `voi_registered.py`, `voi_dice.py` isim tabanlı çalışacak şekilde güncellendi.
+- **8 Zurich PCCT grubu** (72 pair) yeniden koşuldu.
+
+Sonuçlar:
+- Mevcut 6 grup: spleen 0.962–0.968, aorta 0.928–0.942.
+- **140 kVp PolyE**: spleen 0.963, aorta 0.930; **MonoE**: spleen 0.963, aorta 0.929.
+- 140 kVp'de kemik label'ı olmadığı için bone-based registration yapılamıyor; test-retest zaten hizalı (centroid ~0.08 mm) → **identity**.
+- VOI: 140 kVp'de liver yok; **aorta** çıkarıldı. Test-retest VOI Dice: aorta n=72, ort **0.9936**.
+- Görsel QC yeniden üretildi (etiketler isimden çözülerek).
+
+Not: 140 kVp için liver VOI veya kemik tabanlı registration istenirse bu serilerin **tam TotalSegmentator** label setiyle yeniden segmentlenmesi gerekir.
