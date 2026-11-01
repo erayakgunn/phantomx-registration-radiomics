@@ -14,6 +14,8 @@ from pathlib import Path
 import numpy as np
 import SimpleITK as sitk
 
+import label_map
+
 from metrics import centroid_displacement, compare_label
 from registration import (
     read_image,
@@ -221,15 +223,23 @@ def _run(args: argparse.Namespace, output: Path) -> None:
         sitk.Transform(3, sitk.sitkIdentity),
     )
 
-    registration_labels = args.registration_labels or list(DEFAULT_REGISTRATION_LABELS)
+    registration_labels = (
+        args.registration_labels
+        or label_map.registration_labels(Path(args.fixed_seg))
+        or list(DEFAULT_REGISTRATION_LABELS)
+    )
     if not registration_labels:
         raise ValueError("Provide --registration-labels or --labels")
     fixed_labels = np.unique(sitk.GetArrayViewFromImage(fixed_seg))
     moving_labels = np.unique(sitk.GetArrayViewFromImage(moving_seg))
-    labels = args.labels or sorted(
-        int(value) for value in np.intersect1d(fixed_labels, moving_labels)
-        if int(value) != 0
+    labels = args.labels or label_map.resolve_target_labels(
+        Path(args.fixed_seg), args.target_organs
     )
+    if not labels:
+        labels = sorted(
+            int(value) for value in np.intersect1d(fixed_labels, moving_labels)
+            if int(value) != 0
+        )
     if not labels:
         raise ValueError(
             "Fixed ve moving segmentasyonlarda ortak hedef organ etiketi bulunamadı"
@@ -558,6 +568,7 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--moving-seg", required=True)
     ap.add_argument("--output", required=True)
     ap.add_argument("--labels", type=int, nargs="*")
+    ap.add_argument("--target-organs", nargs="+", default=["spleen", "aorta"])
     ap.add_argument("--registration-labels", type=int, nargs="*")
     ap.add_argument("--registration-spacing", type=float, default=2.0)
     ap.add_argument("--skip-threshold-mm", type=float, default=5.0)

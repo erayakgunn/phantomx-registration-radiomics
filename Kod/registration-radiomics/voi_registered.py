@@ -17,6 +17,8 @@ import SimpleITK as sitk
 
 from registration import read_image
 
+import label_map
+
 
 def centroid_phys(seg: sitk.Image, label: int):
     arr = sitk.GetArrayViewFromImage(seg)
@@ -44,7 +46,14 @@ def voi_image(reference, size_vox, origin, pixel_type):
 
 
 def parse_organs(values):
-    return [(int(v.split(":")[0]), v.split(":")[1], float(v.split(":")[2])) for v in values]
+    organs = []
+    for value in values:
+        parts = value.split(":")
+        if len(parts) == 2:
+            organs.append((None, parts[0], float(parts[1])))
+        else:
+            organs.append((int(parts[0]), parts[1], float(parts[2])))
+    return organs
 
 
 def main(args: argparse.Namespace) -> None:
@@ -52,7 +61,8 @@ def main(args: argparse.Namespace) -> None:
     registration = args.registration
     fixed_dir = labeled / args.fixed_session
     fixed_ct = read_image(fixed_dir / "nifti" / args.fixed_series / "ct.nii.gz", sitk.sitkFloat32)
-    fixed_seg = read_image(fixed_dir / "segmentation" / args.fixed_series / "seg.nii.gz", sitk.sitkUInt16)
+    fixed_seg_path = fixed_dir / "segmentation" / args.fixed_series / "seg.nii.gz"
+    fixed_seg = read_image(fixed_seg_path, sitk.sitkUInt16)
     spacing = np.array(fixed_ct.GetSpacing(), dtype=float)
     output_root = args.output
     output_root.mkdir(parents=True, exist_ok=True)
@@ -60,7 +70,12 @@ def main(args: argparse.Namespace) -> None:
 
     pairs = sorted(p for p in registration.iterdir()
                    if p.is_dir() and (p / "ct_registered.nii.gz").exists())
+    mapping = label_map.load_label_map(fixed_seg_path)
     for label, organ, size_mm in parse_organs(args.organs):
+        if label is None:
+            label = mapping.get(organ)
+        if label is None:
+            continue
         center = centroid_phys(fixed_seg, label)
         if center is None:
             print(f"[skip] {organ}: label {label} fixed seg'de yok")
@@ -128,7 +143,7 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--fixed-series", required=True)
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--summary", type=Path, required=True)
-    ap.add_argument("--organs", nargs="+", default=["5:liver:30", "52:aorta:10"])
+    ap.add_argument("--organs", nargs="+", default=["liver:30", "aorta:10"])
     return ap
 
 

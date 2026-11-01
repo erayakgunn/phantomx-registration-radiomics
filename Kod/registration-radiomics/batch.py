@@ -65,6 +65,7 @@ def series_files(session: Path) -> list[tuple[str, Path, Path]]:
 
 def _process_pair(index: int, total: int, item, fixed_ct: Path,
                   fixed_seg: Path, output: Path, labels: list[int],
+                  target_organs: list[str],
                   threads_per_process: int, force: bool,
                   skip_threshold_mm: float, ct_interpolator: str) -> dict:
     session, name, ct, seg = item
@@ -88,10 +89,13 @@ def _process_pair(index: int, total: int, item, fixed_ct: Path,
         "--moving-ct", str(ct),
         "--moving-seg", str(seg),
         "--output", str(pair_output),
-        "--labels", *[str(label) for label in labels],
         "--skip-threshold-mm", str(skip_threshold_mm),
         "--ct-interpolator", ct_interpolator,
     ]
+    if labels:
+        command += ["--labels", *[str(label) for label in labels]]
+    else:
+        command += ["--target-organs", *[str(name) for name in target_organs]]
     if force:
         command.append("--force")
     environment = os.environ.copy()
@@ -154,6 +158,7 @@ def _main(args: argparse.Namespace) -> int:
             pool.submit(
                 _process_pair, index, total, item,
                 fixed_ct, fixed_seg, args.output, args.labels,
+                args.target_organs,
                 threads_per_process, args.force, args.skip_threshold_mm,
                 args.ct_interpolator,
             ): index
@@ -199,7 +204,8 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--fixed-session", required=True, help="e.g. 20260805_PCCT_Aorta_Spleen")
     ap.add_argument("--fixed-series", help="Exact series folder name; overrides take1 discovery")
     ap.add_argument("--output", type=Path, required=True)
-    ap.add_argument("--labels", type=int, nargs="+", default=[1, 52])
+    ap.add_argument("--labels", type=int, nargs="+", default=None)
+    ap.add_argument("--target-organs", nargs="+", default=["spleen", "aorta"])
     ap.add_argument("--limit", type=int)
     ap.add_argument("--workers", type=int, default=2)
     ap.add_argument("--session-filter")

@@ -13,6 +13,7 @@ import SimpleITK as sitk
 
 from metrics import compare_label
 from registration import read_image, resample_mask
+import label_map
 
 
 for stream in (sys.stdout, sys.stderr):
@@ -34,6 +35,12 @@ def overlay(axis, image, fixed, moving, z, title):
 def main(args: argparse.Namespace) -> None:
     fixed_ct = read_image(args.fixed_ct, sitk.sitkFloat32)
     fixed_seg = read_image(args.fixed_seg, sitk.sitkUInt16)
+    mapping = label_map.load_label_map(args.fixed_seg)
+    organ_labels = [
+        (row, mapping[name], name)
+        for row, name in enumerate(("spleen", "aorta"))
+        if name in mapping
+    ]
     image = sitk.GetArrayFromImage(fixed_ct)
     fixed_array = sitk.GetArrayFromImage(fixed_seg)
     identity = sitk.Transform(3, sitk.sitkIdentity)
@@ -62,7 +69,7 @@ def main(args: argparse.Namespace) -> None:
         identity_seg = resample_mask(moving, fixed_seg, identity)
         registered_seg = read_image(pair / "seg_registered.nii.gz", sitk.sitkUInt16)
         figure, axes = plt.subplots(2, 3, figsize=(13, 8))
-        for row, label, organ in ((0, 1, "spleen"), (1, 52, "aorta")):
+        for row, label, organ in organ_labels:
             fixed_mask = fixed_array == label
             identity_mask = sitk.GetArrayFromImage(identity_seg) == label
             registered_mask = sitk.GetArrayFromImage(registered_seg) == label

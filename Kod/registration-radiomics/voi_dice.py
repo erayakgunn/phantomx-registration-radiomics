@@ -16,7 +16,9 @@ import numpy as np
 import SimpleITK as sitk
 from registration import read_image
 
-ORGANS = [(5, "liver", 30.0), (52, "aorta", 10.0)]
+import label_map
+
+ORGANS = [("liver", 30.0), ("aorta", 10.0)]
 
 
 def centroid_phys(seg, label):
@@ -57,7 +59,11 @@ def process(fixed_seg_path: Path, reg_root: Path, dataset: str, rows: list):
     fixed_arr = sitk.GetArrayFromImage(fixed_seg)
     pairs = sorted(p for p in reg_root.iterdir()
                    if p.is_dir() and (p / "seg_registered.nii.gz").exists())
-    for label, organ, size_mm in ORGANS:
+    mapping = label_map.load_label_map(fixed_seg_path)
+    for organ, size_mm in ORGANS:
+        label = mapping.get(organ)
+        if label is None:
+            continue
         center = centroid_phys(fixed_seg, label)
         if center is None:
             continue

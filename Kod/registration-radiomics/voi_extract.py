@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 import SimpleITK as sitk
 
+import label_map
 from registration import read_image
 
 
@@ -49,8 +50,11 @@ def voi_image(reference: sitk.Image, size_vox, origin, pixel_type):
 def parse_organs(values: list[str]):
     organs = []
     for value in values:
-        label, name, size_mm = value.split(":")
-        organs.append((int(label), name, float(size_mm)))
+        parts = value.split(":")
+        if len(parts) == 2:
+            organs.append((None, parts[0], float(parts[1])))
+        else:
+            organs.append((int(parts[0]), parts[1], float(parts[2])))
     return organs
 
 
@@ -72,7 +76,15 @@ def main(args: argparse.Namespace) -> None:
         base_ct = read_image(nifti / base / "ct.nii.gz", sitk.sitkFloat32)
         spacing = np.array(base_ct.GetSpacing(), dtype=float)
 
+        organ_specs = []
         for label, organ, size_mm in organs:
+            if label is None:
+                label = label_map.load_label_map(
+                    segmentation / base / "seg.nii.gz"
+                ).get(organ)
+            if label is not None:
+                organ_specs.append((label, organ, size_mm))
+        for label, organ, size_mm in organ_specs:
             center = centroid_phys(base_seg, label)
             if center is None:
                 print(f"[skip] {group.name} {organ}: label {label} yok")
@@ -147,7 +159,7 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--labeled", type=Path, required=True)
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--summary", type=Path, required=True)
-    ap.add_argument("--organs", nargs="+", default=["5:liver:30", "52:aorta:10"])
+    ap.add_argument("--organs", nargs="+", default=["liver:30", "aorta:10"])
     return ap
 
 
