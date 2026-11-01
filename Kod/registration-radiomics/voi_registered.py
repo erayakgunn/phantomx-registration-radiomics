@@ -45,6 +45,26 @@ def voi_image(reference, size_vox, origin, pixel_type):
     return image
 
 
+def sphere_mask(size_vox, spacing, size_mm):
+    nx, ny, nz = size_vox
+    zz, yy, xx = np.ogrid[:nz, :ny, :nx]
+    cx, cy, cz = (nx - 1) / 2.0, (ny - 1) / 2.0, (nz - 1) / 2.0
+    dist2 = (((xx - cx) * spacing[0]) ** 2
+             + ((yy - cy) * spacing[1]) ** 2
+             + ((zz - cz) * spacing[2]) ** 2)
+    return dist2 <= (size_mm / 2.0) ** 2
+
+
+def apply_voi_shape(image, shape, size_vox, spacing, size_mm, background):
+    if shape == "cube":
+        return image
+    arr = sitk.GetArrayFromImage(image)
+    arr[~sphere_mask(size_vox, spacing, size_mm)] = background
+    out = sitk.GetImageFromArray(arr)
+    out.CopyInformation(image)
+    return out
+
+
 def parse_organs(values):
     organs = []
     for value in values:
@@ -88,7 +108,7 @@ def main(args: argparse.Namespace) -> None:
             "fixed_series": args.fixed_series,
             "organ": organ, "label": label,
             "center_phys": [float(x) for x in center],
-            "size_mm": size_mm, "size_vox": size_vox,
+            "size_mm": size_mm, "shape": args.voi_shape, "size_vox": size_vox,
             "spacing": [float(x) for x in spacing],
             "origin": [float(x) for x in origin],
         }, indent=2), encoding="utf-8")
@@ -102,6 +122,8 @@ def main(args: argparse.Namespace) -> None:
                                    sitk.sitkLinear, -1024.0, sitk.sitkFloat32)
             seg_voi = sitk.Resample(seg, seg_ref, sitk.Transform(3, sitk.sitkIdentity),
                                     sitk.sitkNearestNeighbor, 0, sitk.sitkUInt16)
+            ct_voi = apply_voi_shape(ct_voi, args.voi_shape, size_vox, spacing, size_mm, -1024.0)
+            seg_voi = apply_voi_shape(seg_voi, args.voi_shape, size_vox, spacing, size_mm, 0)
             pair_dir = organ_dir / pair.name
             pair_dir.mkdir(parents=True, exist_ok=True)
             sitk.WriteImage(ct_voi, str(pair_dir / "ct_voi.nii.gz"))
@@ -119,6 +141,7 @@ def main(args: argparse.Namespace) -> None:
                 "pair": pair.name,
                 "organ": organ,
                 "size_mm": size_mm,
+                "shape": args.voi_shape,
                 "size_vox": "x".join(str(v) for v in size_vox),
                 "organ_fraction": round(frac, 5),
                 "mean_hu": round(mean_hu, 3),
@@ -144,6 +167,7 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--summary", type=Path, required=True)
     ap.add_argument("--organs", nargs="+", default=["liver:30", "aorta:10"])
+    ap.add_argument("--voi-shape", choices=("cube", "sphere"), default="cube")
     return ap
 
 

@@ -193,6 +193,126 @@ def make_method_flowchart(path: Path) -> Path:
     return path
 
 
+ORGAN_LABELS = {1: "spleen", 3: "spleen", 52: "aorta", 6: "aorta"}
+
+
+def _metrics_frame(base: Path) -> pd.DataFrame:
+    rows = []
+    for f in base.glob("*/*/metrics.csv"):
+        try:
+            df = pd.read_csv(f)
+        except Exception:
+            continue
+        df["group"] = f.parent.parent.name
+        rows.append(df[["group", "label", "before_dice", "after_dice"]])
+    if not rows:
+        return pd.DataFrame(columns=["group", "label", "before_dice", "after_dice", "organ"])
+    df = pd.concat(rows, ignore_index=True)
+    df["organ"] = df["label"].map(ORGAN_LABELS)
+    return df[df["organ"].notna()]
+
+
+def _pool(df: pd.DataFrame, organ: str):
+    d = df[df["organ"] == organ]
+    if d.empty:
+        return float("nan"), float("nan"), 0
+    return float(d["before_dice"].median()), float(d["after_dice"].median()), len(d)
+
+
+def _cross_summary(base: Path) -> dict:
+    rows = []
+    for f in base.glob("*/metrics.csv"):
+        try:
+            rows.append(pd.read_csv(f))
+        except Exception:
+            continue
+    if not rows:
+        return {}
+    df = pd.concat(rows, ignore_index=True)
+    df["organ"] = df["label"].map(ORGAN_LABELS)
+    df = df[df["organ"].notna()]
+    out = {}
+    for organ, g in df.groupby("organ"):
+        out[organ] = (float(g["before_dice"].median()), float(g["after_dice"].median()), len(g))
+    return out
+
+
+def add_zurich_validation(doc: Document, pcct_work: Path, sep_work: Path, voi_csv: Path,
+                          pcct_long: Path, sep_long: Path):
+    pcct0 = _metrics_frame(pcct_work / "REGISTRATION")
+    pcct5 = _metrics_frame(pcct_work / "REGISTRATION_skip5")
+    sep0 = _metrics_frame(sep_work / "REGISTRATION")
+    sep5 = _metrics_frame(sep_work / "REGISTRATION_skip5")
+
+    doc.add_heading("Zurich Test-Retest Doğrulaması: Zorlamasız Registration, VOI Şekli ve Değerlendirici Etkisi", level=1)
+    doc.add_paragraph(
+        "Zurich test-retest verisinde (PCCT 8 protokol × 10 tekrar; SEP 5 protokol × 10–20 tekrar) "
+        "organ centroid farkı tüm pair'lerde ≤0.94 mm idi. Bu nedenle 5 mm skip eşiği ile "
+        "registration'ın identity'de kalması beklenir. İki koşu karşılaştırıldı: skip0 "
+        "(registration zorlandı) ve skip5 (identity)."
+    )
+    rows = []
+    for label, d0, d5 in (("PCCT", pcct0, pcct5), ("SEP", sep0, sep5)):
+        for organ in ("spleen", "aorta"):
+            b0, a0, _ = _pool(d0, organ)
+            b5, a5, n5 = _pool(d5, organ)
+            rows.append([
+                label, organ.capitalize(),
+                f"{b0:.4f}", f"{a0:.4f}", f"{a0 - b0:+.4f}",
+                f"{b5:.4f}", f"{a5:.4f}", f"{a5 - b5:+.4f}", f"{n5}",
+            ])
+    add_table(doc, ["Veri seti", "Organ", "skip0 önce", "skip0 sonra", "skip0 Δ",
+                    "skip5 önce", "skip5 sonra", "skip5 Δ", "N"], rows)
+    doc.add_paragraph(
+        "skip5 koşusunda tüm pair'ler identity'ye düştü ve before == after (Δ = 0.0000) oldu. "
+        "skip0'da PCCT'te 25/72 pair landmark/centroid ile zorla register edilmişti; SEP'te "
+        "yalnız 1/55 pair. Bu nedenle test-retest Dice düşüşü registration'ın değil, gereksiz "
+        "resampling'in sonucudur."
+    )
+    doc.add_paragraph(
+        "Öğrenci değerlendiricisinde Ref maskesi kırpılmış crop'a, Target ise tam fixed grid'e "
+        "resample ediliyor; identity'de bile ~0.001–0.003 yapay fark oluşabiliyor. Ek olarak "
+        "45 all-pairs medyanı ile 9 test-retest medyanı farklıdır. Aynı tam grid ve aynı pair "
+        "seti kullanıldığında düşüş kaybolur; nitekim pilot metrics.csv değerleri skip5'te "
+        "birebir eşittir."
+    )
+
+    voi_rows = []
+    if voi_csv.exists():
+        v = pd.read_csv(voi_csv)
+        v["dataset"] = v["dataset"].astype(str).str.split(":").str[0]
+        for (ds, organ, shape), g in v.groupby(["dataset", "organ", "shape"]):
+            if ds not in ("zurich_pcct", "zurich_sep"):
+                continue
+            voi_rows.append([ds, organ, shape, f"{g['voi_dice'].median():.4f}",
+                             f"{g['full_dice'].median():.4f}", len(g)])
+    add_table(doc, ["Veri seti", "Organ", "VOI şekli", "VOI Dice", "Tam-organ Dice", "N"], voi_rows)
+    doc.add_paragraph(
+        "VOI organın içinde tanımlı olduğundan VOI Dice 0.99–1.00 aralığında doyuyor. Özellikle "
+        "10 mm aort küresi tamamen organ içinde kaldığı için maskenin tamamı 1 oluyor ve Dice "
+        "trivially 1.0 çıkıyor. Bu nedenle VOI Dice registration QC metriği değildir; VOI feature "
+        "(HU/radiomics) stabilitesi için kullanılmalı, registration QC için tam-organ Dice "
+        "kullanılmalıdır. Küre küpe göre daha homojen HU verir (SD daha düşük) ama Dice ayırt "
+        "ediciliği yoktur."
+    )
+
+    pc = _cross_summary(pcct_long)
+    se = _cross_summary(sep_long)
+    rows = []
+    for label, data in (("PCCT", pc), ("SEP", se)):
+        for organ in ("spleen", "aorta"):
+            if organ in data:
+                b, a, n = data[organ]
+                rows.append([label, organ.capitalize(), f"{b:.4f}", f"{a:.4f}",
+                             f"{a - b:+.4f}", str(n)])
+    add_table(doc, ["Veri seti", "Organ", "Önce (identity)", "Sonra (registered)", "Δ", "N"], rows)
+    doc.add_paragraph(
+        "Cross-date'te registration'ın faydası belirgindir: PCCT'te spleen 0.035→0.964, aorta "
+        "0.126→0.931; SEP'te 0.000→0.962 ve 0.000→0.927. Test-retest'te registration gereksiz, "
+        "cross-date'te zorunludur."
+    )
+
+
 def main(args: argparse.Namespace):
     reg_root = args.registration_root
     analysis = reg_root / "analysis"
@@ -229,7 +349,7 @@ def main(args: argparse.Namespace):
     title.add_run("Longitudinal PhantomX CT’de Organ Radyomik Ölçümlerinin\nRegistration-Based Spatial Standardization’ı")
     subtitle = doc.add_paragraph()
     subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    subtitle.add_run("v1.0.0 analiz raporu | 26 Ekim 2026").italic = True
+    subtitle.add_run("v1.1.0 analiz raporu | 2 Kasım 2026").italic = True
     doc.add_paragraph()
 
     doc.add_heading("Özet", level=1)
@@ -242,7 +362,10 @@ def main(args: argparse.Namespace):
         f"{dice_before[1]:.3f}’ten {dice_after[1]:.3f}’e yükseldi. En güvenilir "
         "fallback, vertebra/kaburga/sternum centroid’lerinden türetilen landmark "
         "rigid dönüşümü oldu. Bununla birlikte, radiomic feature tekrarlanabilirliği "
-        "feature ailesine göre değişti; registration bütün feature’ları iyileştirmedi."
+        "feature ailesine göre değişti; registration bütün feature’ları iyileştirmedi. "
+        "Zurich test-retest doğrulamasında 5 mm skip eşiği ile tüm pair’ler identity’de "
+        "kaldı ve Dice değişmedi; cross-date’te ise registration Dice’ı 0.03–0.13’ten "
+        "0.93–0.96’ya çıkardı."
     )
 
     doc.add_heading("Araştırma Sorusu", level=1)
@@ -561,6 +684,9 @@ def main(args: argparse.Namespace):
         "https://erayakgunn.github.io/registration-overlay/analytics.html"
     )
 
+    add_zurich_validation(doc, args.zurich_pcct, args.zurich_sep, args.voi_shapes,
+                          reg_root, args.sep_longitudinal)
+
     doc.add_heading("Tartışma", level=1)
     doc.add_paragraph(
         "v1.0.0, organ maskelerinin spatial overlap’ını kuvvetle artırdı. Aynı zamanda "
@@ -579,6 +705,8 @@ def main(args: argparse.Namespace):
         "Aorta için aynı-oturum TotalSegmentator maksimum Dice 0.9892 olduğundan 0.99 katı eşiği ölçülebilir segmentation tavanıyla uyumsuzdur.",
         "Feature aileleri ve organlar ayrı raporlanmalı; near-zero/kararsız feature’lar relative fark analizinden çıkarılmalı veya özel işaretlenmelidir.",
         "Companion organ-coordinate yönteminin kodu/çıktıları bu paket içinde bulunmadığından, aynı pair ve MIRP ayarlarında doğrudan karşılaştırma henüz yapılamadı.",
+        "Test-retest’te registration zorlanmamalıdır (5 mm skip, identity); VOI Dice registration QC metriği değildir, registration QC için tam-organ Dice kullanılmalıdır.",
+        "Değerlendirici karşılaştırmalarında Ref ve Target aynı tam fixed grid üzerinde hesaplanmalı; crop/full-grid karışımı identity’de bile yapay fark üretir.",
     ]:
         doc.add_paragraph(item, style="List Bullet")
 
@@ -591,7 +719,10 @@ def main(args: argparse.Namespace):
         "Bu nedenle registration’ın gerekliliği organ ve feature ailesi bazında "
         "değerlendirilmeli; identity/world-space resampling kontrolü ve companion "
         "yöntem karşılaştırması tamamlanmadan tüm radiomics için genel üstünlük "
-        "iddia edilmemelidir."
+        "iddia edilmemelidir. Zurich test-retest doğrulaması bu ayrımı destekler: "
+        "zaten hizalı veride identity en iyi sonucu verirken, cross-date’te registration "
+        "zorunludur; VOI ise feature stabilitesi için tanımlıdır, Dice/registration QC "
+        "metriği değildir."
     )
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -600,10 +731,18 @@ def main(args: argparse.Namespace):
 
 
 def parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(description="Generate v1.0.0 academic DOCX report")
+    ap = argparse.ArgumentParser(description="Generate v1.1.0 academic DOCX report")
     ap.add_argument("dataset_root", type=Path)
     ap.add_argument("registration_root", type=Path)
     ap.add_argument("--output", type=Path, required=True)
+    ap.add_argument("--zurich-pcct", type=Path,
+                    default=Path(r"C:/Users/eray/Desktop/zurich_pcct_work"))
+    ap.add_argument("--zurich-sep", type=Path,
+                    default=Path(r"C:/Users/eray/Desktop/zurich_sep_work"))
+    ap.add_argument("--voi-shapes", type=Path,
+                    default=Path(r"C:/Users/eray/Desktop/zurich_pcct_work/VOI_DICE_SUMMARY_shapes.csv"))
+    ap.add_argument("--sep-longitudinal", type=Path,
+                    default=Path(r"C:/Users/eray/Desktop/SEP - ['Br40f',_'3']_120_100_300_1/PhantomX/REGISTRATION/batch_to_20260805_v6"))
     return ap
 
 

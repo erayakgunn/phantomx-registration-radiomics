@@ -2,7 +2,7 @@
 
 The VOI is defined in physical space from the reference (base) series:
 - center = organ centroid of the reference series
-- size   = fixed physical cube (mm), same for every take
+- size   = fixed physical cube or sphere (mm), same for every take
 
 Each take's CT and segmentation are resampled onto the VOI grid and saved,
 together with per-take coverage/HU statistics.
@@ -45,6 +45,27 @@ def voi_image(reference: sitk.Image, size_vox, origin, pixel_type):
     image.SetOrigin(origin)
     image.SetDirection(reference.GetDirection())
     return image
+
+
+def sphere_mask(size_vox, spacing, size_mm):
+    """Boolean (z, y, x) mask of a sphere with diameter ``size_mm`` in the VOI grid."""
+    nx, ny, nz = size_vox
+    zz, yy, xx = np.ogrid[:nz, :ny, :nx]
+    cx, cy, cz = (nx - 1) / 2.0, (ny - 1) / 2.0, (nz - 1) / 2.0
+    dist2 = (((xx - cx) * spacing[0]) ** 2
+             + ((yy - cy) * spacing[1]) ** 2
+             + ((zz - cz) * spacing[2]) ** 2)
+    return dist2 <= (size_mm / 2.0) ** 2
+
+
+def apply_voi_shape(image, shape, size_vox, spacing, size_mm, background):
+    if shape == "cube":
+        return image
+    arr = sitk.GetArrayFromImage(image)
+    arr[~sphere_mask(size_vox, spacing, size_mm)] = background
+    out = sitk.GetImageFromArray(arr)
+    out.CopyInformation(image)
+    return out
 
 
 def parse_organs(values: list[str]):
@@ -98,6 +119,7 @@ def main(args: argparse.Namespace) -> None:
                 "reference_series": base,
                 "center_phys": [float(x) for x in center],
                 "size_mm": size_mm,
+                "shape": args.voi_shape,
                 "size_vox": size_vox,
                 "spacing": [float(x) for x in spacing],
                 "origin": [float(x) for x in origin],
@@ -117,6 +139,8 @@ def main(args: argparse.Namespace) -> None:
                                        sitk.sitkLinear, -1024.0, sitk.sitkFloat32)
                 seg_voi = sitk.Resample(seg, seg_ref, sitk.Transform(3, sitk.sitkIdentity),
                                         sitk.sitkNearestNeighbor, 0, sitk.sitkUInt16)
+                ct_voi = apply_voi_shape(ct_voi, args.voi_shape, size_vox, spacing, size_mm, -1024.0)
+                seg_voi = apply_voi_shape(seg_voi, args.voi_shape, size_vox, spacing, size_mm, 0)
 
                 series_dir = organ_dir / s
                 series_dir.mkdir(parents=True, exist_ok=True)
@@ -136,6 +160,7 @@ def main(args: argparse.Namespace) -> None:
                     "organ": organ,
                     "series": s,
                     "size_mm": size_mm,
+                    "shape": args.voi_shape,
                     "size_vox": "x".join(str(v) for v in size_vox),
                     "organ_fraction": round(frac, 5),
                     "mean_hu": round(mean_hu, 3),
@@ -160,6 +185,7 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--summary", type=Path, required=True)
     ap.add_argument("--organs", nargs="+", default=["liver:30", "aorta:10"])
+    ap.add_argument("--voi-shape", choices=("cube", "sphere"), default="cube")
     return ap
 
 
