@@ -1,3 +1,5 @@
 SimpleITK>=2.5
 numpy>=2.0
 scipy>=1.13
+surface-distance>=0.1
+scikit-image>=0.22

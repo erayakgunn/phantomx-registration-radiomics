@@ -1,4 +1,16 @@
-"""Geometric metrics for physical-space label-map comparisons."""
+"""Geometric metrics for physical-space label-map comparisons.
+
+Surface metrics follow the Metrics Reloaded / DeepMind ``surface-distance``
+conventions:
+  * HD95         : robust (area-weighted) Hausdorff distance, 95th percentile
+                   of both directed distances (max of the two).
+  * ASSD         : average symmetric surface distance (mean of the two
+                   area-weighted directed averages).
+  * MSSD         : mean symmetric surface distance (pooled, unweighted).
+  * NSD @ 1 mm   : normalised surface distance (surface Dice at 1 mm).
+  * clDice       : centreline Dice from 3D skeletons (tubular structures).
+  * Dice         : standard volumetric Dice (unchanged).
+"""
 
 from __future__ import annotations
 
@@ -7,8 +19,25 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
+import scipy.ndimage as _ndi
 import SimpleITK as sitk
-from scipy.ndimage import binary_erosion, distance_transform_edt
+
+# surface-distance 0.1 still references the old scipy.ndimage.filters /
+# ndimage.morphology aliases, removed in recent SciPy releases.
+if not hasattr(_ndi, "filters"):
+    _ndi.filters = _ndi
+if not hasattr(_ndi, "morphology"):
+    _ndi.morphology = _ndi
+
+from skimage.morphology import skeletonize  # noqa: E402
+from surface_distance import (  # noqa: E402
+    compute_average_surface_distance,
+    compute_robust_hausdorff,
+    compute_surface_dice_at_tolerance,
+    compute_surface_distances,
+)
+
+NSD_TOLERANCE_MM = 1.0
 
 
 def _arrays(reference: sitk.Image, candidate: sitk.Image, label: int):
@@ -46,16 +75,6 @@ def centroid_displacement(
     return float(np.linalg.norm(np.subtract(first, second)))
 
 
-def _surface(mask: np.ndarray) -> np.ndarray:
-    if not mask.any():
-        return mask
-    # border_value=1 avoids treating the FOV cut plane as a real surface.
-    return np.logical_xor(
-        mask,
-        binary_erosion(mask, structure=np.ones((3, 3, 3)), border_value=1),
-    )
-
-
 def touches_border(image: sitk.Image, label: int) -> bool:
     """True if the label touches any face of the image (FOV truncation)."""
     array = sitk.GetArrayViewFromImage(image) == label
@@ -68,23 +87,75 @@ def touches_border(image: sitk.Image, label: int) -> bool:
     )
 
 
-def surface_metrics(
-    reference: sitk.Image, candidate: sitk.Image, label: int
-) -> tuple[float, float]:
-    """Return HD95 and ASSD in millimetres."""
-    ref, cand = _arrays(reference, candidate, label)
-    ref_surface = _surface(ref)
-    cand_surface = _surface(cand)
-    if not ref_surface.any() or not cand_surface.any():
-        return math.nan, math.nan
+def _cldice(ref: np.ndarray, cand: np.ndarray) -> float:
+    """Centreline Dice on the union bounding box."""
+    if not ref.any() or not cand.any():
+        return math.nan
+    zs, ys, xs = np.nonzero(ref | cand)
+    pad = 2
+    z0, z1 = max(0, int(zs.min()) - pad), min(ref.shape[0], int(zs.max()) + pad + 1)
+    y0, y1 = max(0, int(ys.min()) - pad), min(ref.shape[1], int(ys.max()) + pad + 1)
+    x0, x1 = max(0, int(xs.min()) - pad), min(ref.shape[2], int(xs.max()) + pad + 1)
+    sub_ref = ref[z0:z1, y0:y1, x0:x1]
+    sub_cand = cand[z0:z1, y0:y1, x0:x1]
+    sk_ref = skeletonize(sub_ref)
+    sk_cand = skeletonize(sub_cand)
+    l_ref = int(sk_ref.sum())
+    l_cand = int(sk_cand.sum())
+    if l_ref == 0 or l_cand == 0:
+        return math.nan
+    tprec = float(np.logical_and(sk_ref, sub_cand).sum() / l_ref)
+    tsens = float(np.logical_and(sk_cand, sub_ref).sum() / l_cand)
+    denom = tprec + tsens
+    return float(2.0 * tprec * tsens / denom) if denom else 0.0
 
-    sampling = tuple(reversed(reference.GetSpacing()))
-    ref_distance = distance_transform_edt(~ref_surface, sampling=sampling)
-    cand_distance = distance_transform_edt(~cand_surface, sampling=sampling)
-    ref_to_cand = cand_distance[ref_surface]
-    cand_to_ref = ref_distance[cand_surface]
-    distances = np.concatenate([ref_to_cand, cand_to_ref])
-    return float(np.percentile(distances, 95)), float(np.mean(distances))
+
+def surface_metrics(
+    reference: sitk.Image,
+    candidate: sitk.Image,
+    label: int,
+    reference_array: np.ndarray | None = None,
+    candidate_array: np.ndarray | None = None,
+) -> dict[str, float]:
+    """Metrics Reloaded-compatible surface metrics (mm / unitless)."""
+    empty = {
+        "hd95_mm": math.nan,
+        "hd95_pooled_mm": math.nan,
+        "assd_mm": math.nan,
+        "mssd_mm": math.nan,
+        "nsd_1mm": math.nan,
+        "cldice": math.nan,
+    }
+    if reference_array is None or candidate_array is None:
+        ref, cand = _arrays(reference, candidate, label)
+    else:
+        ref = reference_array == label
+        cand = candidate_array == label
+    if not ref.any() or not cand.any():
+        return empty
+
+    # surface-distance expects the spacing in numpy-array order (z, y, x).
+    spacing_mm = tuple(reversed(reference.GetSpacing()))
+    surface_distances = compute_surface_distances(ref, cand, spacing_mm)
+    d_gt = surface_distances["distances_gt_to_pred"]
+    d_pred = surface_distances["distances_pred_to_gt"]
+    pooled = np.concatenate([d_gt, d_pred]) if (d_gt.size or d_pred.size) else np.array([])
+
+    hd95 = float(compute_robust_hausdorff(surface_distances, 95))
+    gt_mean, pred_mean = compute_average_surface_distance(surface_distances)
+    assd = 0.5 * (float(gt_mean) + float(pred_mean))
+    mssd = float(np.mean(pooled)) if pooled.size else math.nan
+    hd95_pooled = float(np.percentile(pooled, 95)) if pooled.size else math.nan
+    nsd = float(compute_surface_dice_at_tolerance(surface_distances, NSD_TOLERANCE_MM))
+
+    return {
+        "hd95_mm": hd95,
+        "hd95_pooled_mm": hd95_pooled,
+        "assd_mm": assd,
+        "mssd_mm": mssd,
+        "nsd_1mm": nsd,
+        "cldice": _cldice(ref, cand),
+    }
 
 
 def compare_label(
@@ -93,41 +164,22 @@ def compare_label(
     label: int,
     reference_array: np.ndarray | None = None,
     candidate_array: np.ndarray | None = None,
-) -> dict[str, float | int]:
-    """Compare one label using a safe crop for the surface distance transform."""
+) -> dict[str, float | int | bool]:
     if reference_array is None or candidate_array is None:
         ref, cand = _arrays(reference, candidate, label)
     else:
         ref = reference_array == label
         cand = candidate_array == label
-    occupied = np.argwhere(np.logical_or(ref, cand))
-    if not occupied.size:
-        hd95, assd = math.nan, math.nan
-    else:
-        low = np.maximum(occupied.min(axis=0) - 2, 0)
-        high = np.minimum(occupied.max(axis=0) + 3, np.array(ref.shape))
-        slices = tuple(slice(int(start), int(stop)) for start, stop in zip(low, high))
-        ref_small = ref[slices]
-        cand_small = cand[slices]
-        ref_surface = _surface(ref_small)
-        cand_surface = _surface(cand_small)
-        if not ref_surface.any() or not cand_surface.any():
-            hd95, assd = math.nan, math.nan
-        else:
-            sampling = tuple(reversed(reference.GetSpacing()))
-            ref_distance = distance_transform_edt(~ref_surface, sampling=sampling)
-            cand_distance = distance_transform_edt(~cand_surface, sampling=sampling)
-            distances = np.concatenate(
-                [cand_distance[ref_surface], ref_distance[cand_surface]]
-            )
-            hd95, assd = float(np.percentile(distances, 95)), float(np.mean(distances))
     total = int(ref.sum()) + int(cand.sum())
+    dice_value = (
+        2.0 * float(np.logical_and(ref, cand).sum()) / total if total else math.nan
+    )
+    metrics = surface_metrics(reference, candidate, label, reference_array, candidate_array)
     return {
         "label": int(label),
-        "dice": math.nan if total == 0 else 2.0 * float(np.logical_and(ref, cand).sum()) / total,
+        "dice": dice_value,
         "centroid_displacement_mm": centroid_displacement(reference, candidate, label),
-        "hd95_mm": hd95,
-        "assd_mm": assd,
+        **metrics,
         "reference_touches_border": touches_border(reference, label),
         "candidate_touches_border": touches_border(candidate, label),
     }
@@ -135,7 +187,7 @@ def compare_label(
 
 def compare_labels(
     reference: sitk.Image, candidate: sitk.Image, labels: list[int]
-) -> list[dict[str, float | int]]:
+) -> list[dict[str, float | int | bool]]:
     if not labels:
         return []
     reference_array = sitk.GetArrayFromImage(reference)

@@ -93,6 +93,14 @@ def _metric_row(fixed_seg: sitk.Image, moving_seg: sitk.Image,
         "after_hd95_mm": after["hd95_mm"],
         "before_assd_mm": before["assd_mm"],
         "after_assd_mm": after["assd_mm"],
+        "before_hd95_pooled_mm": before["hd95_pooled_mm"],
+        "after_hd95_pooled_mm": after["hd95_pooled_mm"],
+        "before_mssd_mm": before["mssd_mm"],
+        "after_mssd_mm": after["mssd_mm"],
+        "before_nsd_1mm": before["nsd_1mm"],
+        "after_nsd_1mm": after["nsd_1mm"],
+        "before_cldice": before["cldice"],
+        "after_cldice": after["cldice"],
         "before_touches_border": before["candidate_touches_border"],
         "after_touches_border": after["candidate_touches_border"],
     }
@@ -126,8 +134,8 @@ def _passes_stable_qc(before: dict, after: dict) -> bool:
         and float(after["dice"]) > float(before["dice"]) + 1e-6
         and _within_tolerance(after["centroid_displacement_mm"],
                               before["centroid_displacement_mm"], 0.5)
-        and _within_tolerance(after["hd95_mm"], before["hd95_mm"], 1.0)
-        and _within_tolerance(after["assd_mm"], before["assd_mm"], 0.25)
+        and _within_tolerance(after["hd95_pooled_mm"], before["hd95_pooled_mm"], 1.0)
+        and _within_tolerance(after["mssd_mm"], before["mssd_mm"], 0.25)
     )
 
 

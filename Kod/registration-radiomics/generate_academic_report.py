@@ -349,7 +349,7 @@ def main(args: argparse.Namespace):
     title.add_run("Longitudinal PhantomX CT’de Organ Radyomik Ölçümlerinin\nRegistration-Based Spatial Standardization’ı")
     subtitle = doc.add_paragraph()
     subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    subtitle.add_run("v1.2.0 analiz raporu | 2 Kasım 2026").italic = True
+    subtitle.add_run("v1.3.0 analiz raporu | 2 Kasım 2026").italic = True
     doc.add_paragraph()
 
     doc.add_heading("Özet", level=1)
@@ -398,8 +398,15 @@ def main(args: argparse.Namespace):
         "nearest-neighbor interpolation ile fixed grid’e taşındı."
     )
     doc.add_paragraph(
+        "Metrikler Metrics Reloaded uyumludur: Dice (hacim örtüşmesi); "
+        "HD95 (yönlü 95. persentillerin maksimumu, surface-distance); "
+        "ASSD (yönlü ortalama yüzey mesafelerinin ortalaması); "
+        "MSSD (pooled ortalama yüzey mesafesi); NSD@1mm (1 mm toleransta yüzey Dice); "
+        "clDice (3B iskelet merkez çizgisi Dice; özellikle aorta)."
+    )
+    doc.add_paragraph(
         "Aday dönüşümün kabulünde stabil Dice'ın artması ve centroid displacement, "
-        "HD95, ASSD değerlerinin tanımlı toleranslarda kalması şart koşuldu. Böylece "
+        "HD95 (pooled), MSSD değerlerinin tanımlı toleranslarda kalması şart koşuldu. Böylece "
         "hedef organ maskeleri registration'ı seçmek için kullanılmadı."
     )
     flowchart_fig = make_method_flowchart(figure_dir / "method_flowchart.png")
@@ -731,7 +738,7 @@ def main(args: argparse.Namespace):
 
 
 def parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(description="Generate v1.2.0 academic DOCX report")
+    ap = argparse.ArgumentParser(description="Generate v1.3.0 academic DOCX report")
     ap.add_argument("dataset_root", type=Path)
     ap.add_argument("registration_root", type=Path)
     ap.add_argument("--output", type=Path, required=True)
