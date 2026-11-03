@@ -209,7 +209,7 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--limit", type=int)
     ap.add_argument("--workers", type=int, default=2)
     ap.add_argument("--session-filter")
-    ap.add_argument("--skip-threshold-mm", type=float, default=5.0)
+    ap.add_argument("--skip-threshold-mm", type=float, default=2.0)
     ap.add_argument("--ct-interpolator", choices=("linear", "bspline", "windowed_sinc"), default="linear")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--stop-on-error", action="store_true")

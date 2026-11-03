@@ -247,7 +247,7 @@ def add_zurich_validation(doc: Document, pcct_work: Path, sep_work: Path, voi_cs
     doc.add_heading("Zurich Test-Retest Doğrulaması: Zorlamasız Registration, VOI Şekli ve Değerlendirici Etkisi", level=1)
     doc.add_paragraph(
         "Zurich test-retest verisinde (PCCT 8 protokol × 10 tekrar; SEP 5 protokol × 10–20 tekrar) "
-        "organ centroid farkı tüm pair'lerde ≤0.94 mm idi. Bu nedenle 5 mm skip eşiği ile "
+        "organ centroid farkı tüm pair'lerde ≤0.94 mm idi. Bu nedenle 2 mm skip eşiği ile "
         "registration'ın identity'de kalması beklenir. İki koşu karşılaştırıldı: skip0 "
         "(registration zorlandı) ve skip5 (identity)."
     )
@@ -349,7 +349,7 @@ def main(args: argparse.Namespace):
     title.add_run("Longitudinal PhantomX CT’de Organ Radyomik Ölçümlerinin\nRegistration-Based Spatial Standardization’ı")
     subtitle = doc.add_paragraph()
     subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    subtitle.add_run("v1.1.0 analiz raporu | 2 Kasım 2026").italic = True
+    subtitle.add_run("v1.2.0 analiz raporu | 2 Kasım 2026").italic = True
     doc.add_paragraph()
 
     doc.add_heading("Özet", level=1)
@@ -363,7 +363,7 @@ def main(args: argparse.Namespace):
         "fallback, vertebra/kaburga/sternum centroid’lerinden türetilen landmark "
         "rigid dönüşümü oldu. Bununla birlikte, radiomic feature tekrarlanabilirliği "
         "feature ailesine göre değişti; registration bütün feature’ları iyileştirmedi. "
-        "Zurich test-retest doğrulamasında 5 mm skip eşiği ile tüm pair’ler identity’de "
+        "Zurich test-retest doğrulamasında 2 mm skip eşiği ile tüm pair’ler identity’de "
         "kaldı ve Dice değişmedi; cross-date’te ise registration Dice’ı 0.03–0.13’ten "
         "0.93–0.96’ya çıkardı."
     )
@@ -388,7 +388,7 @@ def main(args: argparse.Namespace):
     doc.add_heading("Kullanılan Yöntem", level=1)
     doc.add_paragraph(
         "DICOM geometri bilgisi korunarak CT ve multi-label maskeler fiziksel/world "
-        "koordinatlarda karşılaştırıldı. Hedef organ centroid displacement’ı 5 mm "
+        "koordinatlarda karşılaştırıldı. Hedef organ centroid displacement’ı 2 mm "
         "veya altındaysa identity/world-space sonuç korundu. Büyük farklarda önce "
         "correlation tabanlı rigid registration denendi. Registration QC’si, hedef "
         "organ Dice’ına göre değil bağımsız vertebra, kaburga ve sternum maskeleri "
@@ -673,7 +673,7 @@ def main(args: argparse.Namespace):
         "Aynı oturum içindeki tekrarlar yüksek Dice verdi (identity); farklı oturumlarda "
         "rigid/landmark registration Dice'ı belirgin biçimde yükseltti. Düşük Dice'lı seriler "
         "dışlanmadı, gerekçeleriyle notlandı: SEP'te 20260731_t20 (zayıf rigid hizalama, "
-        "HD95 4–5 mm) ve 20260128_t1 (identity; segmentasyon/şekil), PCCT'te 20260601_t1 "
+        "HD95 4–5 mm) ve 20260128_t1 (4.2 mm; 2 mm eşikle landmark ile düzeltildi: spleen 0.834→0.955, aorta 0.878→0.917; kalan fark segmentasyon/şekil), PCCT'te 20260601_t1 "
         "(HD95 2.0 mm, aorta sınırlayıcı) ve 20260622_t3 (ince kemik kabuğu/şekil farkı). "
         "20260622 _s1005 ise _s2087 ile aynı ışınlamadır; Dice'ı iyi olduğu için kalite "
         "nedeniyle değil, yalnızca çift sayımı kaygısıyla ayrıca belirtilmiştir."
@@ -705,7 +705,7 @@ def main(args: argparse.Namespace):
         "Aorta için aynı-oturum TotalSegmentator maksimum Dice 0.9892 olduğundan 0.99 katı eşiği ölçülebilir segmentation tavanıyla uyumsuzdur.",
         "Feature aileleri ve organlar ayrı raporlanmalı; near-zero/kararsız feature’lar relative fark analizinden çıkarılmalı veya özel işaretlenmelidir.",
         "Companion organ-coordinate yönteminin kodu/çıktıları bu paket içinde bulunmadığından, aynı pair ve MIRP ayarlarında doğrudan karşılaştırma henüz yapılamadı.",
-        "Test-retest’te registration zorlanmamalıdır (5 mm skip, identity); VOI Dice registration QC metriği değildir, registration QC için tam-organ Dice kullanılmalıdır.",
+        "Test-retest’te registration zorlanmamalıdır (2 mm skip, identity); VOI Dice registration QC metriği değildir, registration QC için tam-organ Dice kullanılmalıdır.",
         "Değerlendirici karşılaştırmalarında Ref ve Target aynı tam fixed grid üzerinde hesaplanmalı; crop/full-grid karışımı identity’de bile yapay fark üretir.",
     ]:
         doc.add_paragraph(item, style="List Bullet")
@@ -731,7 +731,7 @@ def main(args: argparse.Namespace):
 
 
 def parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(description="Generate v1.1.0 academic DOCX report")
+    ap = argparse.ArgumentParser(description="Generate v1.2.0 academic DOCX report")
     ap.add_argument("dataset_root", type=Path)
     ap.add_argument("registration_root", type=Path)
     ap.add_argument("--output", type=Path, required=True)
@@ -742,7 +742,7 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--voi-shapes", type=Path,
                     default=Path(r"C:/Users/eray/Desktop/zurich_pcct_work/VOI_DICE_SUMMARY_shapes.csv"))
     ap.add_argument("--sep-longitudinal", type=Path,
-                    default=Path(r"C:/Users/eray/Desktop/SEP - ['Br40f',_'3']_120_100_300_1/PhantomX/REGISTRATION/batch_to_20260805_v6"))
+                    default=Path(r"C:/Users/eray/Desktop/SEP - ['Br40f',_'3']_120_100_300_1/PhantomX/REGISTRATION/batch_to_20260805_v6_skip2"))
     return ap
 
 

@@ -571,7 +571,7 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--target-organs", nargs="+", default=["spleen", "aorta"])
     ap.add_argument("--registration-labels", type=int, nargs="*")
     ap.add_argument("--registration-spacing", type=float, default=2.0)
-    ap.add_argument("--skip-threshold-mm", type=float, default=5.0)
+    ap.add_argument("--skip-threshold-mm", type=float, default=2.0)
     ap.add_argument("--transform-kind", choices=("rigid", "translation"), default="rigid")
     ap.add_argument("--ct-interpolator", choices=("linear", "bspline", "windowed_sinc"), default="linear")
     ap.add_argument("--force", action="store_true")
