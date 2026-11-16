@@ -7,6 +7,7 @@ import csv
 import glob
 import json
 import os
+import re
 import statistics
 from collections import Counter
 from pathlib import Path
@@ -313,6 +314,200 @@ def add_zurich_validation(doc: Document, pcct_work: Path, sep_work: Path, voi_cs
     )
 
 
+def add_kidney_section(doc: Document, figures: Path, csv_path: Path) -> None:
+    if not csv_path.exists():
+        doc.add_heading("Böbrek Değerlendirmesi", level=1)
+        doc.add_paragraph(f"Böbrek metrik dosyası bulunamadı: {csv_path}")
+        return
+    frame = pd.read_csv(csv_path)
+    cross = frame[
+        (frame["Scope"] == "cross-date")
+        & frame["Organ"].isin(["kidney_right", "kidney_left"])
+    ]
+    if cross.empty:
+        doc.add_heading("Böbrek Değerlendirmesi", level=1)
+        doc.add_paragraph("Cross-date böbrek satırı bulunamadı.")
+        return
+
+    names = {"kidney_right": "Sağ böbrek", "kidney_left": "Sol böbrek"}
+    tol = 0.0005
+    def before_surface(series, n, digits):
+        return "—" if series.notna().sum() < n * 0.5 else f"{series.median():.{digits}f}"
+
+    rows = []
+    for (dataset, organ), group in cross.groupby(["Dataset", "Organ"], sort=True):
+        rows.append([
+            dataset.replace(" cross-date", ""),
+            names.get(organ, organ),
+            len(group),
+            f"{group['Dice_before'].median():.3f}",
+            f"{group['Dice_after'].median():.3f}",
+            before_surface(group["ASSD_before"], len(group), 2),
+            f"{group['ASSD_after'].median():.2f}",
+            before_surface(group["MSSD_before"], len(group), 2),
+            f"{group['MSSD_after'].median():.2f}",
+            before_surface(group["HD95_before"], len(group), 2),
+            f"{group['HD95_after'].median():.2f}",
+            int((group["Dice_delta"] > tol).sum()),
+            int((group["Dice_delta"] < -tol).sum()),
+        ])
+
+    doc.add_heading("Böbrek Değerlendirmesi (Sağ/Sol Ayrı)", level=1)
+    doc.add_paragraph(
+        "Böbrekler TotalSegmentator label 2 (sağ) ve 3 (sol) üzerinden ayrı "
+        "değerlendirildi. 'Önce' = identity (çakıştırma yok), 'Sonra' = rigid "
+        "registration. ASSD/HD95 mm cinsindendir; identity'de böbrek FOV dışında "
+        "kalan satırlar medyana girmez. Yarıdan fazlası geçersiz olan 'önce' "
+        "ASSD/HD95 değerleri '—' ile gösterilir (özellikle SEP cross-date)."
+    )
+    add_table(
+        doc,
+        ["Veri seti", "Organ", "N", "Dice önce", "Dice sonra", "ASSD önce",
+         "ASSD sonra", "MSSD önce", "MSSD sonra", "HD95 önce", "HD95 sonra",
+         "İyileşen", "Kötüleşen"],
+        rows,
+    )
+    add_caption(
+        doc,
+        "Tablo: Cross-date böbrek (sağ/sol) registration öncesi/sonrası medyan "
+        "Dice, ASSD, MSSD ve HD95.",
+    )
+
+    scan_path = Path(r"C:/Users/eray/Desktop/KIDNEY_CC_SCAN.csv")
+    if scan_path.exists():
+        scan = pd.read_csv(scan_path)
+        islands = scan[scan["After_components"] > 1]
+        doc.add_paragraph(
+            f"Tüm böbrek maskeleri bağlı bileşen taramasından geçirildi: "
+            f"{len(scan)} maskenin {len(islands)}'inde (%{100 * len(islands) / len(scan):.1f}) "
+            "izole bileşen saptandı. Bunların 10'u cross-date PCCT (7 sağ, 3 sol), "
+            "8'i test-retest PCCT (tamamı 3 mm recon, sağ böbrek); SEP'te adacık yok. "
+            "Ham ortalamalar adacıklar nedeniyle şişer; largest-component ortalamaları "
+            "medyana yaklaşır. Kaynak maskeler değiştirilmedi; bu tanısal bir duyarlılık "
+            "analizidir."
+        )
+        scan_rows = []
+        for (dataset, organ), group in scan.groupby(["Dataset", "Organ"], sort=True):
+            scan_rows.append([
+                f"{dataset.replace(' cross-date', '')} · {names.get(organ, organ)}",
+                len(group),
+                int((group["After_components"] > 1).sum()),
+                f"{group['Raw_ASSD_mm'].mean():.2f}/{group['Raw_ASSD_mm'].median():.2f}",
+                f"{group['Largest_ASSD_mm'].mean():.2f}/{group['Largest_ASSD_mm'].median():.2f}",
+                f"{group['Raw_MSSD_mm'].mean():.2f}/{group['Raw_MSSD_mm'].median():.2f}",
+                f"{group['Largest_MSSD_mm'].mean():.2f}/{group['Largest_MSSD_mm'].median():.2f}",
+            ])
+        add_table(
+            doc,
+            ["Grup", "n", "Adacık", "ASSD ham ort/med", "ASSD largest ort/med",
+             "MSSD ham ort/med", "MSSD largest ort/med"],
+            scan_rows,
+        )
+        add_caption(
+            doc,
+            "Tablo: Böbrek connected-component taraması (528 maske). Ham ve "
+            "largest-component ASSD/MSSD ort/med (mm); kaynak maskeler değiştirilmedi.",
+        )
+
+    doc.add_paragraph(
+        "Böbrek ASSD/MSSD medyanları dalak ve aorta ile aynı düzeydedir "
+        "(yaklaşık 0.34–0.46 mm). PCCT'te 18 böbrek maskesinde (10 cross-date + "
+        "8 test-retest; test-retest'in tamamı 3 mm recon) registered maskede izole "
+        "uzak bir bileşen surface metriklerini şişirmektedir; en büyük bağlı "
+        "bileşenle aynı vakalarda ASSD 0.30–0.53 mm, MSSD 0.28–0.54 mm, HD95 "
+        "1.0–1.2 mm'ye iner (ör. 20260327_t2: ASSD 15.60→0.34, MSSD 13.15→0.36, "
+        "HD95 299.2→1.0). SEP 20260731_s80 ise tek bileşenli gerçek "
+        "segmentasyon/recon aykırısıdır (ASSD 3.16/2.72, MSSD 3.59/3.07, "
+        "HD95 12.2/11.0); bileşen filtresi bunu değiştirmez. Ayrıntı: "
+        "KIDNEY_CC_OUTLIERS.csv ve KIDNEY_CC_SCAN.csv."
+    )
+
+    cc_path = Path(r"C:/Users/eray/Desktop/KIDNEY_CC_OUTLIERS.csv")
+    if cc_path.exists():
+        cc = pd.read_csv(cc_path).head(8)
+        cc_rows = []
+        for _, item in cc.iterrows():
+            pair = str(item["Pair"])
+            match = re.search(r"_(\d{8})_.*?_take(\d+)", pair)
+            suffix = "_s80" if "_s80" in pair else ""
+            short = (
+                f"{match.group(1)}_t{match.group(2)}{suffix}"
+                if match
+                else pair[-24:]
+            )
+            cc_rows.append([
+                short, item["Organ"],
+                f"{item['Raw_ASSD_mm']:.2f}", f"{item['Largest_ASSD_mm']:.2f}",
+                f"{item['Raw_MSSD_mm']:.2f}", f"{item['Largest_MSSD_mm']:.2f}",
+                f"{item['Raw_HD95_mm']:.1f}", f"{item['Largest_HD95_mm']:.1f}",
+                int(item["Components_after"]),
+            ])
+        add_table(
+            doc,
+            ["Vaka", "Organ", "ASSD ham", "ASSD largest", "MSSD ham",
+             "MSSD largest", "HD95 ham", "HD95 largest", "Bileşen"],
+            cc_rows,
+        )
+        add_caption(
+            doc,
+            "Tablo: İzole bileşen aykırıları; ham ve yalnız-en-büyük-bileşen "
+            "surface metrikleri (kaynak maskeler değiştirilmedi).",
+        )
+
+    figures.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(7.5, 4.0))
+    labels, before, after = [], [], []
+    for (dataset, organ), group in cross.groupby(["Dataset", "Organ"], sort=True):
+        labels.append(f"{dataset.replace(' cross-date', '')}\n{names.get(organ, organ)}")
+        before.append(float(group["Dice_before"].median()))
+        after.append(float(group["Dice_after"].median()))
+    x = np.arange(len(labels))
+    ax.bar(x - .18, before, .36, label="Önce (identity)", color="#9aa6b2")
+    ax.bar(x + .18, after, .36, label="Sonra (rigid)", color="#2878B5")
+    ax.set_xticks(x, labels, fontsize=8)
+    ax.set_ylim(0, 1.05)
+    ax.set_ylabel("Medyan Dice")
+    ax.set_title("Böbrek: registration öncesi/sonrası Dice")
+    ax.legend(frameon=False)
+    ax.grid(axis="y", alpha=.2)
+    fig.tight_layout()
+    fig_path = figures / "kidney_dice_summary.png"
+    fig.savefig(fig_path, dpi=180)
+    plt.close(fig)
+    doc.add_picture(str(fig_path), width=Inches(6.2))
+    add_caption(doc, "Şekil: Sağ/sol böbrek Dice medyanları; önce identity, sonra rigid.")
+
+    case_dir = Path(r"C:/Users/eray/Desktop/phantomx-overlay-site/assets/20260707_t3")
+    panel = [
+        ("HAM (moving)", case_dir / "kidney_right_axial_1_raw.jpg"),
+        ("IDENTITY (önce)", case_dir / "kidney_right_axial_1_identity.jpg"),
+        ("CENTROID", case_dir / "kidney_right_axial_1_before.jpg"),
+        ("RIGID (sonra)", case_dir / "kidney_right_axial_1_after.jpg"),
+    ]
+    if all(path.exists() for _, path in panel):
+        fig, axes = plt.subplots(1, 4, figsize=(12, 3.4))
+        for axis, (label, path) in zip(axes, panel):
+            axis.imshow(plt.imread(path))
+            axis.set_title(label, fontsize=9)
+            axis.axis("off")
+        fig.suptitle("Sağ böbrek · temsili vaka (20260707_t3)", fontsize=10)
+        fig.tight_layout()
+        panel_path = figures / "kidney_before_after_panel.png"
+        fig.savefig(panel_path, dpi=160)
+        plt.close(fig)
+        doc.add_picture(str(panel_path), width=Inches(6.8))
+        add_caption(
+            doc,
+            "Şekil: Sağ böbrek segmentasyonu; ham, identity (çakıştırma öncesi), "
+            "centroid ve rigid (sonra).",
+        )
+    doc.add_paragraph(
+        "Ayrıntılı before/after görselleri (ham | identity | centroid | rigid; "
+        "aorta, dalak, sağ böbrek, sol böbrek) registration-overlay sitesinde ve "
+        "görsel QC paketinde sunulmuştur."
+    )
+
+
 def main(args: argparse.Namespace):
     reg_root = args.registration_root
     analysis = reg_root / "analysis"
@@ -349,14 +544,14 @@ def main(args: argparse.Namespace):
     title.add_run("Longitudinal PhantomX CT’de Organ Radyomik Ölçümlerinin\nRegistration-Based Spatial Standardization’ı")
     subtitle = doc.add_paragraph()
     subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    subtitle.add_run("v1.3.0 analiz raporu | 2 Kasım 2026").italic = True
+    subtitle.add_run("v1.4.1 analiz raporu | 16 Kasım 2026").italic = True
     doc.add_paragraph()
 
     doc.add_heading("Özet", level=1)
     doc.add_paragraph(
-        "Bu çalışmada PhantomX longitudinal PCCT görüntülerinde spleen ve aorta "
-        "maskelerinin fiziksel koordinat farklılıkları ve registration’ın radyomik "
-        "tekrarlanabilirliğe etkisi incelendi. Toplam 88 moving seri, 20260805 take1 "
+        "Bu çalışmada PhantomX longitudinal PCCT görüntülerinde spleen, aorta ve "
+        "böbrek (sağ/sol) maskelerinin fiziksel koordinat farklılıkları ve "
+        "registration’ın radyomik tekrarlanabilirliğe etkisi incelendi. Toplam 88 moving seri, 20260805 take1 "
         "referansına karşı değerlendirildi. Registration sonrası ortalama Dice "
         f"spleen için {dice_before[0]:.3f}’ten {dice_after[0]:.3f}’e, aorta için "
         f"{dice_before[1]:.3f}’ten {dice_after[1]:.3f}’e yükseldi. En güvenilir "
@@ -365,7 +560,9 @@ def main(args: argparse.Namespace):
         "feature ailesine göre değişti; registration bütün feature’ları iyileştirmedi. "
         "Zurich test-retest doğrulamasında 2 mm skip eşiği ile tüm pair’ler identity’de "
         "kaldı ve Dice değişmedi; cross-date’te ise registration Dice’ı 0.03–0.13’ten "
-        "0.93–0.96’ya çıkardı."
+        "0.93–0.96’ya çıkardı. Böbrekler ayrıca sağ/sol olarak değerlendirildi; "
+        "cross-date medyan Dice sağ böbrek 0.94, sol böbrek 0.95–0.96 düzeyine ulaştı "
+        "(ayrıntı: Böbrek Değerlendirmesi)."
     )
 
     doc.add_heading("Araştırma Sorusu", level=1)
@@ -380,7 +577,7 @@ def main(args: argparse.Namespace):
         ["Veri", "22 PhantomX oturumu; 89 seri"],
         ["Analiz pair’i", "1 fixed referans (20260805 take1) + 88 moving seri"],
         ["Protokol", "NAEOTOM Alpha PCCT, Q3/Qr40f, 120 kV, 100 mAs, 300 mm FOV, 1 mm"],
-        ["Hedef organlar", "Spleen (label 1), aorta (label 52)"],
+        ["Hedef organlar", "Spleen (1), aorta (52), böbrek sağ (2), böbrek sol (3)"],
         ["Geometrik metrikler", "Dice, centroid displacement, HD95, ASSD"],
         ["Radiomics", "MIRP 2.5.0, IBSI ayarları; ayrı 2D ve 3D"],
     ])
@@ -717,6 +914,8 @@ def main(args: argparse.Namespace):
     ]:
         doc.add_paragraph(item, style="List Bullet")
 
+    add_kidney_section(doc, figure_dir, args.kidney_metrics)
+
     doc.add_heading("Sonuç", level=1)
     doc.add_paragraph(
         "v1.0.0’da rigid ve landmark/centroid tabanlı spatial standardization, "
@@ -738,7 +937,7 @@ def main(args: argparse.Namespace):
 
 
 def parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(description="Generate v1.3.0 academic DOCX report")
+    ap = argparse.ArgumentParser(description="Generate v1.4.1 academic DOCX report")
     ap.add_argument("dataset_root", type=Path)
     ap.add_argument("registration_root", type=Path)
     ap.add_argument("--output", type=Path, required=True)
@@ -750,6 +949,8 @@ def parser() -> argparse.ArgumentParser:
                     default=Path(r"C:/Users/eray/Desktop/zurich_pcct_work/VOI_DICE_SUMMARY_shapes.csv"))
     ap.add_argument("--sep-longitudinal", type=Path,
                     default=Path(r"C:/Users/eray/Desktop/SEP - ['Br40f',_'3']_120_100_300_1/PhantomX/REGISTRATION/batch_to_20260805_v6_skip2"))
+    ap.add_argument("--kidney-metrics", type=Path,
+                    default=Path(r"C:/Users/eray/Desktop/KIDNEY_METRICS_PCCT_SEP.csv"))
     return ap
 
 

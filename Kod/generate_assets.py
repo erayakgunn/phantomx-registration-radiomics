@@ -33,8 +33,13 @@ FIXED_BASE = (
 )
 FIXED_LABEL = "20260805_t1"
 LABELS = [*range(27, 44), *range(92, 116), 116]
-ORGANS = {52: "aorta", 1: "spleen"}
-ORGAN_LABELS = {52: "Aorta", 1: "Spleen"}
+ORGANS = {52: "aorta", 1: "spleen", 2: "kidney_right", 3: "kidney_left"}
+ORGAN_LABELS = {
+    52: "Aorta",
+    1: "Spleen",
+    2: "Right kidney",
+    3: "Left kidney",
+}
 
 # Display window in CT Hounsfield units.
 WINDOW_LEVEL = 50.0

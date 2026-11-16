@@ -36,9 +36,10 @@ def main(args: argparse.Namespace) -> None:
     fixed_ct = read_image(args.fixed_ct, sitk.sitkFloat32)
     fixed_seg = read_image(args.fixed_seg, sitk.sitkUInt16)
     mapping = label_map.load_label_map(args.fixed_seg)
+    organ_names = ("spleen", "aorta", "kidney right", "kidney left")
     organ_labels = [
         (row, mapping[name], name)
-        for row, name in enumerate(("spleen", "aorta"))
+        for row, name in enumerate(organ_names)
         if name in mapping
     ]
     image = sitk.GetArrayFromImage(fixed_ct)
@@ -68,7 +69,8 @@ def main(args: argparse.Namespace) -> None:
         moving = read_image(moving_path, sitk.sitkUInt16)
         identity_seg = resample_mask(moving, fixed_seg, identity)
         registered_seg = read_image(pair / "seg_registered.nii.gz", sitk.sitkUInt16)
-        figure, axes = plt.subplots(2, 3, figsize=(13, 8))
+        rows_n = max(1, len(organ_labels))
+        figure, axes = plt.subplots(rows_n, 3, figsize=(13, 4 * rows_n), squeeze=False)
         for row, label, organ in organ_labels:
             fixed_mask = fixed_array == label
             identity_mask = sitk.GetArrayFromImage(identity_seg) == label

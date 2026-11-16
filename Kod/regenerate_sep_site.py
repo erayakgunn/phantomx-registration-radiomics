@@ -12,6 +12,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE / "registration-radiomics"))
+import annotate_site_artifacts as artifact_annotator  # noqa: E402
 import generate_all_assets as g  # noqa: E402
 
 SEP_ROOT = next(Path(r"C:/Users/eray/Desktop").glob("SEP -*")) / "PhantomX"
@@ -57,3 +58,4 @@ new += 'const DATASET_KEY = new URLSearchParams(location.search).get("dataset") 
 new += "window.CASES = window.DATASETS[DATASET_KEY] || window.DATASETS.sep;\n"
 DATA_JS.write_text(new, encoding="utf-8")
 print(f"SEP site updated: {len(temp_payload['cases'])} cases")
+artifact_annotator.main()

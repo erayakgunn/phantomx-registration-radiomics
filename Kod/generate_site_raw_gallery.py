@@ -1,4 +1,4 @@
-"""Regenerate site gallery thumbnails as 3-column (raw | centroid | rigid).
+﻿"""Regenerate site gallery thumbnails as 4-column (ham | identity | centroid | rigid).
 
 The raw state is the moving mask with the identity transform (no registration).
 It is rendered on the fixed CT with a crop that includes the raw organ, so the
@@ -29,8 +29,8 @@ PCCT_ROOT = Path(r"C:/Users/eray/Desktop/PCCT - Q3_Qr40f_120_100_300_1_PolyE/Pha
 
 SEP_FIXED = "USZ_SIEMENS_SOMATOM_Edge_Plus_20260805_S3_Br40f_120_100_300_1_PolyE_take1_recon1mm"
 PCCT_FIXED = "USZ_Siemens_Healthineers_NAEOTOM_Alpha_20260805_Q3_Qr40f_120_100_300_1_PolyE_take1"
-MARGIN_MM = {"aorta": 35.0, "spleen": 30.0}
-ORGANS = [("aorta", 52), ("spleen", 1)]
+MARGIN_MM = {"aorta": 35.0, "spleen": 30.0, "kidney_right": 28.0, "kidney_left": 28.0}
+ORGANS = [("aorta", 52), ("spleen", 1), ("kidney_right", 2), ("kidney_left", 3)]
 
 try:
     FONT = ImageFont.truetype("arialbd.ttf", 16)
@@ -63,7 +63,7 @@ def moving_ct(root: Path, dataset: str, day: str, series_full: str) -> Path:
 
 def batch_dir(root: Path, dataset: str, day: str, series_full: str) -> Path:
     if dataset == "sep":
-        base_dir = root / "REGISTRATION" / "batch_to_20260805_v6"
+        base_dir = root / "REGISTRATION" / "batch_to_20260805_v6_skip2"
         session = f"{day}_SEP_Aorta_Spleen"
     else:
         base_dir = root / "REGISTRATION" / "batch_to_20260805_v1.0.0"
@@ -74,29 +74,34 @@ def batch_dir(root: Path, dataset: str, day: str, series_full: str) -> Path:
     return matches[0]
 
 
-def union_crop(fixed, raw, centroid, organ, spacing, margin_mm):
-    masks = [m == organ for m in (fixed, raw, centroid)]
+def union_crop(shape, arrays, organ, spacing, margin_mm):
+    masks = [array == organ for array in arrays]
     z, y, x = np.where(np.logical_or.reduce(masks))
     if not len(y):
         return None
     my = int(round(margin_mm / spacing[1]))
     mx = int(round(margin_mm / spacing[0]))
-    return (max(0, int(y.min()) - my), min(fixed.shape[1], int(y.max()) + my + 1),
-            max(0, int(x.min()) - mx), min(fixed.shape[2], int(x.max()) + mx + 1))
+    return (max(0, int(y.min()) - my), min(shape[1], int(y.max()) + my + 1),
+            max(0, int(x.min()) - mx), min(shape[2], int(x.max()) + mx + 1))
 
 
 def make_gallery(case_dir: Path, organ_tiles: dict):
     tile = 320
-    canvas = Image.new("RGB", (tile * 3, tile * 2), (2, 7, 12))
+    labels = [("HAM", "ham"), ("IDENTITY", "identity"),
+              ("CENTROID", "centroid"), ("RIGID", "rigid")]
+    canvas = Image.new("RGB", (tile * len(labels), tile * len(ORGANS)), (2, 7, 12))
     draw = ImageDraw.Draw(canvas)
-    labels = [("HAM", "ham"), ("CENTROID", "centroid"), ("RIGID", "rigid")]
     for row, (organ, _) in enumerate(ORGANS):
         for col, (label, key) in enumerate(labels):
-            image = Image.open(organ_tiles[(organ, key)]).convert("RGB").resize(
-                (tile, tile), Image.Resampling.LANCZOS)
             x, y = col * tile, row * tile
-            canvas.paste(image, (x, y))
-            text = f"{organ.upper()} · {label}"
+            path = organ_tiles.get((organ, key))
+            if path and Path(path).exists():
+                image = Image.open(path).convert("RGB").resize(
+                    (tile, tile), Image.Resampling.LANCZOS)
+                canvas.paste(image, (x, y))
+            else:
+                draw.rectangle([x, y, x + tile - 1, y + tile - 1], fill=(8, 16, 26))
+            text = f"{organ.upper().replace('_', ' ')} · {label}"
             bbox = draw.textbbox((0, 0), text, font=FONT)
             pad_x, pad_y = 8, 5
             box = (x + 8, y + 8, x + 8 + (bbox[2] - bbox[0]) + pad_x * 2,
@@ -149,41 +154,58 @@ def process_case(root: Path, dataset: str, case: dict):
                              sitk.sitkNearestNeighbor, 0, sitk.sitkUInt16)
     rigid = sitk.Resample(moving, fixed_seg, sitk.ReadTransform(str(tfm_path)),
                           sitk.sitkNearestNeighbor, 0, sitk.sitkUInt16)
+    identity = sitk.Resample(moving, fixed_seg, sitk.Transform(3, sitk.sitkIdentity),
+                             sitk.sitkNearestNeighbor, 0, sitk.sitkUInt16)
     centroid_arr = sitk.GetArrayFromImage(centroid)
     rigid_arr = sitk.GetArrayFromImage(rigid)
+    identity_arr = sitk.GetArrayFromImage(identity)
 
     tiles = {}
+    made = False
     for organ, label in ORGANS:
-        z = int(case["views"][organ]["axial"][1]["label"].split()[1])
+        views = case.get("views", {}).get(organ, {})
+        axial = views.get("axial") or []
+        if not axial:
+            continue
+        z = int((axial[1] if len(axial) > 1 else axial[0])["label"].split()[1])
         # HAM: raw moving CT at the moving organ's own centre slice
         zs_m = np.where(moving_arr == label)[0]
         z_m = int(round(float(zs_m.mean()))) if len(zs_m) else moving_arr.shape[0] // 2
         z_m = max(0, min(moving_ct_arr.shape[0] - 1, z_m))
-        crop_m = union_crop(fixed_on_moving_arr, moving_arr, moving_arr, label, spacing_m, MARGIN_MM[organ])
-        if crop_m is None:
-            return False
-        ym0, ym1, xm0, xm1 = crop_m
-        base.render(
-            moving_ct_arr[z_m, ym0:ym1, xm0:xm1],
-            fixed_on_moving_arr[z_m, ym0:ym1, xm0:xm1] == label,
-            moving_arr[z_m, ym0:ym1, xm0:xm1] == label,
-            case_dir / f"{organ}_gal_ham.jpg", size=560, quality=84)
-        tiles[(organ, "ham")] = case_dir / f"{organ}_gal_ham.jpg"
+        crop_m = union_crop(
+            fixed_on_moving_arr.shape, [fixed_on_moving_arr, moving_arr],
+            label, spacing_m, MARGIN_MM[organ],
+        )
+        if crop_m is not None:
+            ym0, ym1, xm0, xm1 = crop_m
+            base.render(
+                moving_ct_arr[z_m, ym0:ym1, xm0:xm1],
+                fixed_on_moving_arr[z_m, ym0:ym1, xm0:xm1] == label,
+                moving_arr[z_m, ym0:ym1, xm0:xm1] == label,
+                case_dir / f"{organ}_gal_ham.jpg", size=560, quality=84)
+            tiles[(organ, "ham")] = case_dir / f"{organ}_gal_ham.jpg"
+            made = True
 
-        # CENTROID / RIGID: fixed CT, aligned moving mask
-        crop = union_crop(fixed_arr, centroid_arr, rigid_arr, label, spacing, MARGIN_MM[organ])
+        # IDENTITY / CENTROID / RIGID: fixed CT, moving mask in each state
+        crop = union_crop(
+            fixed_arr.shape, [fixed_arr, identity_arr, centroid_arr, rigid_arr],
+            label, spacing, MARGIN_MM[organ],
+        )
         if crop is None:
-            return False
+            continue
         y0, y1, x0, x1 = crop
         ct = ct_arr[z, y0:y1, x0:x1]
         fixed_slice = fixed_arr[z, y0:y1, x0:x1] == label
-        for state, arr in (("centroid", centroid_arr), ("rigid", rigid_arr)):
+        for state, arr in (("identity", identity_arr), ("centroid", centroid_arr),
+                           ("rigid", rigid_arr)):
             path = case_dir / f"{organ}_gal_{state}.jpg"
             base.render(ct, fixed_slice, arr[z, y0:y1, x0:x1] == label, path, size=560, quality=84)
             tiles[(organ, state)] = path
+            made = True
 
-    make_gallery(case_dir, tiles)
-    return True
+    if made:
+        make_gallery(case_dir, tiles)
+    return made
 
 
 def main():
@@ -217,3 +239,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

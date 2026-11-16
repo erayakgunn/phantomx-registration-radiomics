@@ -52,23 +52,29 @@ def process_case(root: Path, dataset: str, case: dict) -> bool:
     case_dir = SITE / Path(case["gallery"]).parent
     if not case_dir.exists():
         return False
-    fixed_seg_path, _ = g.fixed_paths(root, dataset)
+    fixed_seg_path, fixed_ct_path = g.fixed_paths(root, dataset)
     moving_path = g.moving_seg(root, dataset, day, series_full)
     moving_ct_path = g.moving_ct(root, dataset, day, series_full)
     if not (fixed_seg_path.exists() and moving_path.exists() and moving_ct_path.exists()):
         return False
 
     fixed_seg = sitk.ReadImage(str(fixed_seg_path))
+    fixed_ct = sitk.ReadImage(str(fixed_ct_path))
     moving = sitk.ReadImage(str(moving_path))
     moving_ct_img = sitk.ReadImage(str(moving_ct_path))
     fixed_arr = sitk.GetArrayFromImage(fixed_seg)
+    fixed_ct_arr = sitk.GetArrayFromImage(fixed_ct)
     moving_arr = sitk.GetArrayFromImage(moving)
     moving_ct_arr = sitk.GetArrayFromImage(moving_ct_img)
     spacing_m = np.array(moving_ct_img.GetSpacing(), dtype=float)
+    spacing_f = np.array(fixed_seg.GetSpacing(), dtype=float)
 
     fixed_on_moving = sitk.Resample(fixed_seg, moving_ct_img, sitk.Transform(3, sitk.sitkIdentity),
                                     sitk.sitkNearestNeighbor, 0, sitk.sitkUInt16)
     fixed_on_moving_arr = sitk.GetArrayFromImage(fixed_on_moving)
+    identity = sitk.Resample(moving, fixed_seg, sitk.Transform(3, sitk.sitkIdentity),
+                             sitk.sitkNearestNeighbor, 0, sitk.sitkUInt16)
+    identity_arr = sitk.GetArrayFromImage(identity)
 
     changed = False
     for organ, label in g.ORGANS:
@@ -83,8 +89,8 @@ def process_case(root: Path, dataset: str, case: dict) -> bool:
         for i, view in enumerate(case["views"][organ]["axial"]):
             z_f = int(view["label"].split()[1])
             z_m = frac_index(fz, mz, z_f)
-            crop = g.union_crop(fixed_on_moving_arr, moving_arr, moving_arr, label, spacing_m,
-                                g.MARGIN_MM[organ])
+            crop = g.union_crop(fixed_on_moving_arr.shape, [fixed_on_moving_arr, moving_arr],
+                                label, spacing_m, g.MARGIN_MM[organ])
             if crop is None:
                 continue
             y0, y1, x0, x1 = crop
@@ -94,6 +100,19 @@ def process_case(root: Path, dataset: str, case: dict) -> bool:
                         moving_arr[z_m, y0:y1, x0:x1] == label,
                         out, size=560, quality=82)
             view["raw"] = f"{Path(case['gallery']).parent.as_posix()}/{out.name}"
+            changed = True
+
+            crop_f = g.union_crop(fixed_arr.shape, [fixed_arr, identity_arr],
+                                  label, spacing_f, g.MARGIN_MM[organ])
+            if crop_f is None:
+                continue
+            yf0, yf1, xf0, xf1 = crop_f
+            out_i = case_dir / f"{organ}_axial_{i}_identity.jpg"
+            base.render(fixed_ct_arr[z_f, yf0:yf1, xf0:xf1],
+                        fixed_arr[z_f, yf0:yf1, xf0:xf1] == label,
+                        identity_arr[z_f, yf0:yf1, xf0:xf1] == label,
+                        out_i, size=560, quality=82)
+            view["identity"] = f"{Path(case['gallery']).parent.as_posix()}/{out_i.name}"
             changed = True
 
         # coronal view
@@ -110,6 +129,18 @@ def process_case(root: Path, dataset: str, case: dict) -> bool:
                         moving_arr[z0:z1, y_m, x0:x1] == label,
                         out, size=560, quality=82)
             view["raw"] = f"{Path(case['gallery']).parent.as_posix()}/{out.name}"
+            changed = True
+
+            crop_cf = union_coronal(fixed_arr, identity_arr, label, spacing_f, g.MARGIN_MM[organ])
+            if crop_cf is None:
+                continue
+            zc0, zc1, xc0, xc1 = crop_cf
+            out_i = case_dir / f"{organ}_coronal_identity.jpg"
+            base.render(fixed_ct_arr[zc0:zc1, y_f, xc0:xc1],
+                        fixed_arr[zc0:zc1, y_f, xc0:xc1] == label,
+                        identity_arr[zc0:zc1, y_f, xc0:xc1] == label,
+                        out_i, size=560, quality=82)
+            view["identity"] = f"{Path(case['gallery']).parent.as_posix()}/{out_i.name}"
             changed = True
     return changed
 

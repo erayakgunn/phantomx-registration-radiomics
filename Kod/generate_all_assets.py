@@ -32,12 +32,13 @@ OUT = base.OUT
 ASSETS = base.ASSETS
 FIXED_DAY = base.FIXED_DAY
 FIXED_BASE = base.FIXED_BASE
+SESSION_SUFFIX = "_SEP_Aorta_Spleen"
 FIXED_LABEL = base.FIXED_LABEL
 ORGANS = base.ORGANS
 ORGAN_LABELS = base.ORGAN_LABELS
 
-MARGIN_AXIAL = {52: 95, 1: 55}
-MARGIN_CORONAL = {52: 55, 1: 38}
+MARGIN_AXIAL = {52: 95, 1: 55, 2: 55, 3: 55}
+MARGIN_CORONAL = {52: 55, 1: 38, 2: 40, 3: 40}
 
 FEATURED = {
     "20260730_t1": {
@@ -106,10 +107,11 @@ def read_annotations(batch: Path) -> dict:
 
 def discover_cases() -> list[dict]:
     by_day: dict[str, list[tuple[int, Path]]] = defaultdict(list)
+    pattern = re.compile(rf"^\d{{8}}{re.escape(SESSION_SUFFIX)}")
     for path in BATCH.iterdir():
-        if not path.is_dir() or not re.match(r"^\d{8}_SEP_", path.name):
+        if not path.is_dir() or not pattern.match(path.name):
             continue
-        day = path.name.split("_SEP_")[0]
+        day = path.name.split(SESSION_SUFFIX)[0]
         match = re.search(r"_s(\d+)$", path.name)
         sort_key = int(match.group(1)) if match else 0
         by_day[day].append((sort_key, path))
@@ -119,7 +121,7 @@ def discover_cases() -> list[dict]:
         offset = 1 if day == FIXED_DAY else 0
         for position, (_, batch_path) in enumerate(sorted(entries, key=lambda item: item[0])):
             take_number = position + 1 + offset
-            base_name = batch_path.name.replace(f"{day}_SEP_Aorta_Spleen__", "")
+            base_name = batch_path.name.replace(f"{day}{SESSION_SUFFIX}__", "")
             series = f"{day}_t{take_number}"
             info = FEATURED.get(series, {})
             qc_reason = QC_FLAGS.get(batch_path.name)
@@ -177,14 +179,26 @@ GALLERY_FONT = gallery_font()
 
 
 def make_gallery(case_out: Path, views: dict) -> str:
-    tiles = [
-        (views["aorta"]["axial"][1]["before"], "AORTA · ÖNCE"),
-        (views["aorta"]["axial"][1]["after"], "AORTA · SONRA"),
-        (views["spleen"]["axial"][1]["before"], "SPLEEN · ÖNCE"),
-        (views["spleen"]["axial"][1]["after"], "SPLEEN · SONRA"),
-    ]
+    display = {
+        "aorta": "AORTA",
+        "spleen": "SPLEEN",
+        "kidney_right": "KIDNEY R",
+        "kidney_left": "KIDNEY L",
+    }
+    tiles = []
+    for organ, organ_views in views.items():
+        axial = organ_views.get("axial") or []
+        if not axial:
+            continue
+        view = axial[1] if len(axial) > 1 else axial[0]
+        label = display.get(organ, organ.upper())
+        tiles.append((view["before"], f"{label} · ÖNCE"))
+        tiles.append((view["after"], f"{label} · SONRA"))
+    if not tiles:
+        return ""
     tile_size = 320
-    canvas = Image.new("RGB", (tile_size * 2, tile_size * 2), (2, 7, 12))
+    rows = (len(tiles) + 1) // 2
+    canvas = Image.new("RGB", (tile_size * 2, tile_size * rows), (2, 7, 12))
     draw = ImageDraw.Draw(canvas)
     for index, (asset_path, label) in enumerate(tiles):
         image = Image.open(OUT / asset_path).convert("RGB").resize(
@@ -226,7 +240,7 @@ def write_case(
     picks: dict,
 ) -> dict:
     moving_seg = sitk.ReadImage(
-        str(LAB / f"{case['day']}_SEP_Aorta_Spleen" / "segmentation" / case["series_full"] / "seg.nii.gz")
+        str(LAB / f"{case['day']}{SESSION_SUFFIX}" / "segmentation" / case["series_full"] / "seg.nii.gz")
     )
     before_transform = base.translation_centroid_output_transform(
         base.stable_union(fixed_seg), base.stable_union(moving_seg)
@@ -336,10 +350,9 @@ def write_case(
     payload["gallery"] = make_gallery(case_out, payload["views"])
 
     if not case["featured"]:
-        gain = (
-            (payload["scores"]["aorta"]["after"] - payload["scores"]["aorta"]["before"])
-            + (payload["scores"]["spleen"]["after"] - payload["scores"]["spleen"]["before"])
-        ) / 2
+        gain = sum(
+            s["after"] - s["before"] for s in payload["scores"].values()
+        ) / max(1, len(payload["scores"]))
         if case["qc"]:
             payload["tone"] = "amber"
             payload["tag"] = "QC flag"
@@ -351,27 +364,32 @@ def write_case(
         else:
             payload["tone"] = "mint" if gain > 0.08 else "sky" if gain > 0.03 else "violet"
             payload["tag"] = "Take"
-            payload["note"] = (
-                f"Aorta {payload['scores']['aorta']['before']:.3f}→"
-                f"{payload['scores']['aorta']['after']:.3f}; "
-                f"Spleen {payload['scores']['spleen']['before']:.3f}→"
-                f"{payload['scores']['spleen']['after']:.3f}."
-            )
+            display = {
+                "aorta": "Aorta",
+                "spleen": "Dalak",
+                "kidney_right": "Böbrek sağ",
+                "kidney_left": "Böbrek sol",
+            }
+            payload["note"] = "; ".join(
+                f"{display.get(name, name)} {s['before']:.3f}→{s['after']:.3f}"
+                for name, s in payload["scores"].items()
+            ) + "."
 
     print(
-        f"{case['series']:16s} Aorta "
-        f"{payload['scores']['aorta']['before']:.3f}→{payload['scores']['aorta']['after']:.3f}  "
-        f"Spleen {payload['scores']['spleen']['before']:.3f}→{payload['scores']['spleen']['after']:.3f}"
+        f"{case['series']:16s} " + "  ".join(
+            f"{name} {s['before']:.3f}->{s['after']:.3f}"
+            for name, s in payload["scores"].items()
+        )
     )
     return payload
 
 
 def main() -> None:
     fixed_ct = sitk.ReadImage(
-        str(LAB / f"{FIXED_DAY}_SEP_Aorta_Spleen" / "nifti" / FIXED_BASE / "ct.nii.gz")
+        str(LAB / f"{FIXED_DAY}{SESSION_SUFFIX}" / "nifti" / FIXED_BASE / "ct.nii.gz")
     )
     fixed_seg = sitk.ReadImage(
-        str(LAB / f"{FIXED_DAY}_SEP_Aorta_Spleen" / "segmentation" / FIXED_BASE / "seg.nii.gz")
+        str(LAB / f"{FIXED_DAY}{SESSION_SUFFIX}" / "segmentation" / FIXED_BASE / "seg.nii.gz")
     )
     fixed_ct_array = sitk.GetArrayFromImage(fixed_ct)
     fixed_array = sitk.GetArrayFromImage(fixed_seg)
@@ -433,7 +451,7 @@ def annotate_existing_data() -> None:
     raw = (OUT / "data.js").read_text(encoding="utf-8")
     payload = json.loads(raw.split("=", 1)[1].strip().rstrip(";"))
     for case in payload["cases"]:
-        batch = BATCH / f"{case['day']}_SEP_Aorta_Spleen__{case['seriesFull']}"
+        batch = BATCH / f"{case['day']}{SESSION_SUFFIX}__{case['seriesFull']}"
         case.update(read_annotations(batch))
     (OUT / "data.js").write_text(
         "window.CASES = " + json.dumps(payload, ensure_ascii=False, indent=2) + ";\n",
