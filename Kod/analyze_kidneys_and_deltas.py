@@ -32,8 +32,8 @@ from registration import resample_mask  # noqa: E402
 OUT = Path(r"C:/Users/eray/Desktop/KAYIT_IYILESEN_KOTULESEN.xlsx")
 CSV_OUT = Path(r"C:/Users/eray/Desktop/KIDNEY_METRICS_PCCT_SEP.csv")
 WORKS = [
-    ("PCCT test-retest", Path(r"C:/Users/eray/Desktop/zurich_pcct_work"), "zpcct"),
-    ("SEP test-retest", Path(r"C:/Users/eray/Desktop/zurich_sep_work"), "zsep"),
+    ("PCCT test-retest", Path(r"C:/Users/eray/Desktop/zurich_pcct_work"), "zpcct", "REGISTRATION_skip5"),
+    ("SEP test-retest", Path(r"C:/Users/eray/Desktop/zurich_sep_work"), "zsep", "REGISTRATION_skip5"),
 ]
 ORGAN_LABELS = {1: "spleen", 3: "spleen", 52: "aorta", 6: "aorta"}
 KIDNEYS = [("kidney_right", 2), ("kidney_left", 3)]
@@ -131,9 +131,9 @@ def kidney_pair_rows(
     return rows
 
 
-def read_spleen_aorta(work: Path, dataset: str):
+def read_spleen_aorta(work: Path, dataset: str, reg_name: str = "REGISTRATION"):
     rows = []
-    for mc in work.glob("REGISTRATION/*/*/metrics.csv"):
+    for mc in work.glob(f"{reg_name}/*/*/metrics.csv"):
         pair_dir = mc.parent
         group = pair_dir.parent.name
         series = pair_dir.name.split("__")[-1]
@@ -159,33 +159,24 @@ def read_spleen_aorta(work: Path, dataset: str):
     return rows
 
 
-def read_kidneys(work: Path, dataset: str, prefix: str):
+def read_kidneys(work: Path, dataset: str, prefix: str, reg_name: str = "REGISTRATION"):
     rows = []
-    reg = work / "REGISTRATION"
-    lab = work / "LABELED"
-    if not lab.exists():
+    reg = work / reg_name
+    if not reg.exists():
         return rows
-    for group in sorted(p for p in lab.iterdir() if p.is_dir()):
+    for group in sorted(p for p in reg.iterdir() if p.is_dir()):
         if "140kVp" in group.name:
             continue
-        seg_dir = group / "segmentation"
-        nii_dir = group / "nifti"
-        series = sorted(p.name for p in nii_dir.iterdir() if p.is_dir())
-        if not series:
-            continue
-        base = next((s for s in series if "_s" not in s.split("recon")[-1]), series[0])
-        fixed_seg_path = seg_dir / base / "seg.nii.gz"
-        manifest_path = reg / group.name / "batch_manifest.json"
-        if not fixed_seg_path.exists() or not manifest_path.exists():
-            continue
-        fixed_seg = sitk.ReadImage(str(fixed_seg_path))
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        for item in manifest.get("pairs", []):
-            moving_name = item["series"]
-            pair_dir = reg / group.name / f"{group.name}__{moving_name}"
+        for pair_dir in sorted(p for p in group.iterdir() if p.is_dir() and "__" in p.name):
+            state_path = pair_dir / "pilot_state.json"
             tfm_path = pair_dir / "moving_to_fixed.tfm"
-            seg_path = seg_dir / moving_name / "seg.nii.gz"
-            if not tfm_path.exists() or not seg_path.exists():
+            if not state_path.exists() or not tfm_path.exists():
+                continue
+            try:
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+                fixed_seg = sitk.ReadImage(state["fixed_seg"])
+                moving = sitk.ReadImage(state["moving_seg"])
+            except Exception:  # noqa: BLE001
                 continue
             qc_path = pair_dir / "registration_qc.json"
             method = None
@@ -193,11 +184,11 @@ def read_kidneys(work: Path, dataset: str, prefix: str):
                 method = json.loads(qc_path.read_text(encoding="utf-8")).get("registration_method")
             rows.extend(kidney_pair_rows(
                 fixed_seg,
-                sitk.ReadImage(str(seg_path)),
+                moving,
                 sitk.ReadTransform(str(tfm_path)),
                 dataset,
                 group.name,
-                moving_name,
+                pair_dir.name.split("__")[-1],
                 method,
             ))
     print(f"[kidney] {dataset}: {len(rows)} satir")
@@ -435,9 +426,9 @@ def write_xlsx(rows, kidney_rows, cross_rows, cross_kidney_rows):
 
 if __name__ == "__main__":
     rows, kidney_rows = [], []
-    for dataset, work, prefix in WORKS:
-        rows.extend(read_spleen_aorta(work, dataset))
-        kidney_rows.extend(read_kidneys(work, dataset, prefix))
+    for dataset, work, prefix, reg_name in WORKS:
+        rows.extend(read_spleen_aorta(work, dataset, reg_name))
+        kidney_rows.extend(read_kidneys(work, dataset, prefix, reg_name))
     cross_rows = read_crossdate()
     cross_kidney_rows = read_crossdate_kidneys()
     write_csv(kidney_rows, cross_kidney_rows)

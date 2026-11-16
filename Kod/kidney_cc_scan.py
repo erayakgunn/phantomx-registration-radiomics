@@ -34,8 +34,8 @@ SEP_BATCH = Path(
     r"PhantomX/REGISTRATION/batch_to_20260805_v6_skip2"
 )
 WORK = {
-    "PCCT test-retest": Path(r"C:/Users/eray/Desktop/zurich_pcct_work/REGISTRATION"),
-    "SEP test-retest": Path(r"C:/Users/eray/Desktop/zurich_sep_work/REGISTRATION"),
+    "PCCT test-retest": Path(r"C:/Users/eray/Desktop/zurich_pcct_work/REGISTRATION_skip5"),
+    "SEP test-retest": Path(r"C:/Users/eray/Desktop/zurich_sep_work/REGISTRATION_skip5"),
 }
 LABEL = {"kidney_right": 2, "kidney_left": 3}
 STRUCTURE = np.ones((3, 3, 3), dtype=bool)
