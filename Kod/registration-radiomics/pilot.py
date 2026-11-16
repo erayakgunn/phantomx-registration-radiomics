@@ -261,7 +261,7 @@ def _run(args: argparse.Namespace, output: Path) -> None:
         "labels": sorted(labels),
         "registration_labels": sorted(registration_labels),
         "registration_spacing": args.registration_spacing,
-        "registration_metric": REGISTRATION_METRIC,
+        "registration_metric": args.registration_metric,
         "skip_threshold_mm": args.skip_threshold_mm,
         "transform_kind": args.transform_kind,
     }
@@ -372,7 +372,7 @@ def _run(args: argparse.Namespace, output: Path) -> None:
                         registration_moving_ct,
                         fixed_mask=fixed_registration_mask,
                         initial_transform=initial_transform,
-                        metric=REGISTRATION_METRIC,
+                        metric=args.registration_metric,
                         transform_kind=args.transform_kind,
                     )
                 except Exception as exc:  # noqa: BLE001
@@ -579,6 +579,7 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--target-organs", nargs="+", default=["spleen", "aorta"])
     ap.add_argument("--registration-labels", type=int, nargs="*")
     ap.add_argument("--registration-spacing", type=float, default=2.0)
+    ap.add_argument("--registration-metric", choices=("correlation", "mattes_mi"), default="correlation")
     ap.add_argument("--skip-threshold-mm", type=float, default=2.0)
     ap.add_argument("--transform-kind", choices=("rigid", "translation"), default="rigid")
     ap.add_argument("--ct-interpolator", choices=("linear", "bspline", "windowed_sinc"), default="linear")

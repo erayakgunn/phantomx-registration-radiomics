@@ -67,7 +67,8 @@ def _process_pair(index: int, total: int, item, fixed_ct: Path,
                   fixed_seg: Path, output: Path, labels: list[int],
                   target_organs: list[str],
                   threads_per_process: int, force: bool,
-                  skip_threshold_mm: float, ct_interpolator: str) -> dict:
+                  skip_threshold_mm: float, ct_interpolator: str,
+                  registration_metric: str) -> dict:
     session, name, ct, seg = item
     pair_output = output / f"{session}__{name}"
     state_path = pair_output / "pilot_state.json"
@@ -91,6 +92,7 @@ def _process_pair(index: int, total: int, item, fixed_ct: Path,
         "--output", str(pair_output),
         "--skip-threshold-mm", str(skip_threshold_mm),
         "--ct-interpolator", ct_interpolator,
+        "--registration-metric", registration_metric,
     ]
     if labels:
         command += ["--labels", *[str(label) for label in labels]]
@@ -160,7 +162,7 @@ def _main(args: argparse.Namespace) -> int:
                 fixed_ct, fixed_seg, args.output, args.labels,
                 args.target_organs,
                 threads_per_process, args.force, args.skip_threshold_mm,
-                args.ct_interpolator,
+                args.ct_interpolator, args.registration_metric,
             ): index
             for index, item in enumerate(moving, start=1)
         }
@@ -211,6 +213,7 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--session-filter")
     ap.add_argument("--skip-threshold-mm", type=float, default=2.0)
     ap.add_argument("--ct-interpolator", choices=("linear", "bspline", "windowed_sinc"), default="linear")
+    ap.add_argument("--registration-metric", choices=("correlation", "mattes_mi"), default="correlation")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--stop-on-error", action="store_true")
     return ap
