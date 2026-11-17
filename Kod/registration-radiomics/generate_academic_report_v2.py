@@ -1,4 +1,4 @@
-"""Generate the v2.0 academic report from current PhantomX outputs.
+"""Generate the v2.1 academic report from current PhantomX outputs.
 
 Scope: PCCT and SEP cross-date rigid registration; Zurich test-retest;
 four organs (aorta, spleen, right kidney, left kidney); surface metrics;
@@ -37,7 +37,7 @@ ZURICH_PCCT = Path(r"C:/Users/eray/Desktop/zurich_pcct_work/REGISTRATION_skip5")
 ZURICH_SEP = Path(r"C:/Users/eray/Desktop/zurich_sep_work/REGISTRATION_skip5")
 SITE = Path(r"C:/Users/eray/Desktop/phantomx-overlay-site")
 FIG = PCCT_BATCH / "analysis/report_v2_figures"
-OUT = Path(r"C:/Users/eray/Desktop/RAPOR_AKADEMIK_REGISTRATION_RADIOMICS_v2.0.docx")
+OUT = Path(r"C:/Users/eray/Desktop/RAPOR_AKADEMIK_REGISTRATION_RADIOMICS_v2.1.docx")
 
 ORGAN_ORDER = ["aorta", "spleen", "kidney_right", "kidney_left"]
 ORGAN_LABEL = {
@@ -175,6 +175,8 @@ def kidney_frame(scope: str, mapping: dict[str, str]) -> pd.DataFrame:
     for _, row in frame.iterrows():
         dataset = mapping.get(str(row["Dataset"]))
         if not dataset:
+            continue
+        if scope == "test-retest" and re.search(r"_3_|3mm", str(row["Group"])):
             continue
         rows.append({
             "dataset": dataset,
@@ -469,7 +471,7 @@ def build_report() -> None:
     )
     subtitle = doc.add_paragraph()
     subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    subtitle.add_run("Akademik Rapor v2.0 | 16 Kasım 2026").italic = True
+    subtitle.add_run("Akademik Rapor v2.1 | 17 Kasım 2026").italic = True
     doc.add_paragraph()
     add_paragraph(
         doc,
@@ -830,6 +832,15 @@ def build_report() -> None:
         size=8,
     )
     add_caption(doc, "Tablo 5. Zurich test-retest; skip5 (ve 2 mm) eşiğinde tüm pair’ler identity.")
+    add_paragraph(
+        doc,
+        "Böbrek primary analizi yalnızca 1 mm ile yapıldı: PCCT’te 36, SEP’te 55 "
+        "pair/organ. 3 mm PCCT serileri pooled edilmedi; 3 mm’de 8 adacık, ortalama "
+        "ASSD 7.76 mm ve HD95 108.7 mm iken 1 mm’de adacık yoktur. 3 mm sol "
+        "böbrekte medyan ASSD’nin 0.226 mm görünmesi smoothing/partial volume "
+        "etkisidir, doğruluk artışı değildir. Ayrıntı: BOBREK_1MM_PRIMARY.xlsx ve "
+        "BOBREK_1MM_VS_3MM.xlsx."
+    )
     add_paragraph(
         doc,
         "Test-retest verisi zaten hizalı olduğu için skip5 (ve dolayısıyla 2 mm) "
