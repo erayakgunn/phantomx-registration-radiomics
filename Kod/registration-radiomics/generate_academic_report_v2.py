@@ -694,6 +694,16 @@ def build_report() -> None:
         "RIGID) ve dört organ olarak siteye aktarıldı; adacıklı vakalar ayrıca "
         "etiketlendi.",
     )
+    doc.add_heading("4.6. Böbrek değerlendirme politikası", level=2)
+    for item in [
+        "Primary böbrek analizi yalnızca 1 mm serilerle yapılır.",
+        "Cross-date PCCT/SEP verisi zaten 1 mm'dir; bu nedenle cross-date sonuçları doğrudan primary analizdir.",
+        "Zurich test-retest 3 mm serileri primary analize dahil edilmez; yalnızca ayrı duyarlılık/karşılaştırma olarak raporlanır ve pooled edilmez.",
+        "Primary metrikler ham medyandır; largest-component sonuçları kaynak maskeler değiştirilmeden tanısal duyarlılık olarak verilir.",
+        "SEP 20260731_s80 tek bileşenli gerçek segmentasyon/rekonstrüksiyon aykırısıdır; registration veya bileşen filtresiyle düzeltilmez, ayrı QC vakası olarak tutulur.",
+        "Böbrek yorumu Dice tek başına değil; ASSD/MSSD/HD95, medyan/IQR ve aykırı vaka listesiyle birlikte yapılır.",
+    ]:
+        add_bullet(doc, item)
     add_figure(doc, FIG / "method.png", width=6.6,
                caption="Şekil 1. İş akışı: fiziksel uzay, segmentasyon, üç hizalama durumu ve metrik/QC katmanı.")
 
@@ -994,6 +1004,7 @@ def build_report() -> None:
         "Tek fixed referans (20260805 take1) kullanılmıştır; konsensüs analizi bunun etkisini kısmen gösterse de bağımsız ground truth değildir.",
         "Rigid registration kullanılmıştır; deformable veya yeniden segmentasyon yapılmamıştır. Bu bilinçli bir tercihtir, ancak lokal şekil farklarını kapatmaz.",
         "Böbreklerde 18 adacık ve bir gerçek segmentasyon aykırısı (s80) vardır; largest-component yalnızca tanısal duyarlılık analizidir, kaynak maskeler değiştirilmemiştir.",
+        "Böbrek primary analizi 1 mm ile sınırlandırılmıştır; 3 mm seriler pooled edilmemiş, ayrı duyarlılık olarak bırakılmıştır.",
         "3 mm rekonstrüksiyonlarda adacıklar ve partial volume etkisi daha belirgindir; böbrek yüzey metrikleri rekonstrüksiyon kalınlığına duyarlıdır.",
         "Radyomik analiz yalnızca PCCT dalak/aorta 3D feature’larını kapsar; böbrek radyomikleri ve 2D analiz bu raporda ayrıntılandırılmamıştır.",
         "Konsensüs referansı ve farklı değerlendirici/crop stratejileri mutlak Dice’ı değiştirebilir; bu raporda medyan ve duyarlılık analizleri birlikte verilmiştir.",
@@ -1009,7 +1020,8 @@ def build_report() -> None:
         "biçimde artırdı. Cross-date’te medyan Dice 0.92–0.96, ASSD/MSSD 0.3–0.5 "
         "mm ve HD95 1.0–1.2 mm düzeyine ulaştı; bu, 1 mm kesit kalınlığında "
         "milimetre altı/sınırda doğruluk demektir. Test-retest’te zorlamasız "
-        "identity doğru seçim olarak doğrulandı.",
+        "identity doğru seçim olarak doğrulandı. Böbrek primary analizi 1 mm ile "
+        "sınırlandırıldı; 3 mm yalnızca ayrı duyarlılık olarak raporlandı.",
     )
     add_paragraph(
         doc,
